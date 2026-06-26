@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "source": "aodp-compatible-client",
+  "server": "west",
+  "itemId": "T4_MAIN_CURSEDSTAFF_CRYSTAL@4",
+  "capturedAt": "2026-06-22T18:04:17Z",
+  "payload": {
+    "AlbionId": 6826,
+    "LocationId": "1301",
+    "QualityLevel": 2,
+    "Timescale": 0,
+    "MarketHistories": [
+      {
+        "ItemAmount": 1,
+        "SilverAmount": 1250000,
+        "Timestamp": 1750612800
+      },
+      {
+        "ItemAmount": 2,
+        "SilverAmount": 2400000,
+        "Timestamp": 1750616400
+      }
+    ]
+  }
+}
