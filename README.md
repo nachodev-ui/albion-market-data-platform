@@ -85,9 +85,6 @@ Después vuelve a iniciar:
 .\scripts\receiver.ps1
 ```
 
-::: 
-
-
 ## Requisitos
 
 - Go 1.23 o posterior.
@@ -147,8 +144,6 @@ Puedes validar una captura incluida con:
 ./scripts/verify-api.ps1
 ```
 
-
-
 ## Prueba end-to-end formal
 
 La validación integrada de receiver, outbox, API central, PostgreSQL y frontend
@@ -205,7 +200,6 @@ Invoke-RestMethod http://127.0.0.1:8787/api/v1/status |
 ```
 
 La documentación detallada está en `docs/OBSERVABILIDAD.md` y `docs/FORWARDER_HISTORICO.md`.
-
 
 ## Forwarder histórico central
 
