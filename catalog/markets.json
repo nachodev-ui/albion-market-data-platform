@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "markets": [
+    {
+      "key": "bridgewatch",
+      "name": "Bridgewatch",
+      "type": "regular",
+      "cityLocationId": "2000",
+      "marketLocationId": "2004",
+      "enabled": true
+    },
+    {
+      "key": "martlock",
+      "name": "Martlock",
+      "type": "regular",
+      "cityLocationId": "3004",
+      "marketLocationId": "3008",
+      "enabled": true
+    },
+    {
+      "key": "lymhurst",
+      "name": "Lymhurst",
+      "type": "regular",
+      "cityLocationId": "1000",
+      "marketLocationId": "1002",
+      "enabled": true
+    },
+    {
+      "key": "fort_sterling",
+      "name": "Fort Sterling",
+      "type": "regular",
+      "cityLocationId": "4000",
+      "marketLocationId": "4002",
+      "enabled": true
+    },
+    {
+      "key": "thetford",
+      "name": "Thetford",
+      "type": "regular",
+      "cityLocationId": "0000",
+      "marketLocationId": "0007",
+      "enabled": true
+    },
+    {
+      "key": "caerleon",
+      "name": "Caerleon",
+      "type": "regular",
+      "cityLocationId": "3003",
+      "marketLocationId": "3005",
+      "enabled": true
+    },
+    {
+      "key": "brecilien",
+      "name": "Brecilien",
+      "type": "regular",
+      "cityLocationId": "5000",
+      "marketLocationId": "5003",
+      "enabled": true
+    },
+    {
+      "key": "black_market",
+      "name": "Black Market",
+      "type": "black-market",
+      "cityLocationId": "3003",
+      "marketLocationId": null,
+      "enabled": false
+    }
+  ]
+}

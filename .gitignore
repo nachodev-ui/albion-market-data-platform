@@ -1,0 +1,32 @@
+# Go
+bin/
+*.exe
+*.test
+*.out
+/apps/collector/receiver
+
+# Runtime data
+data/*.jsonl
+data/**/*.jsonl
+data/**/*.json
+!data/.gitkeep
+!data/**/.gitkeep
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Runtime logs and generated backups
+albiondata-client.log*
+data/normalized-backup-*/
+
+
+# Formal integration-test runtime and evidence
+.e2e/
