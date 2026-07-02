@@ -21,6 +21,7 @@ import (
 	"albion-market-data/collector/internal/httpingest"
 	"albion-market-data/collector/internal/normalization"
 	"albion-market-data/collector/internal/observability"
+	"albion-market-data/collector/internal/secrets"
 	"albion-market-data/collector/internal/storage/composite"
 	"albion-market-data/collector/internal/storage/localdb"
 	"albion-market-data/collector/internal/storage/normalizedjsonl"
@@ -41,6 +42,7 @@ func run() error {
 
 	upstreamEnabledDefault := envBool("UPSTREAM_ENABLED", false)
 	upstreamHistoryEnabledDefault := envBool("UPSTREAM_HISTORY_ENABLED", upstreamEnabledDefault)
+	upstreamRequireHTTPSDefault := strings.EqualFold(envString("APP_ENV", "development"), "production")
 
 	listenAddress := flag.String("listen", envString("COLLECTOR_LISTEN", "127.0.0.1:8787"), "local HTTP address to listen on")
 	dataDirectory := flag.String("data-dir", envString("COLLECTOR_DATA_DIR", "./data"), "root directory for raw and normalized storage")
@@ -52,7 +54,10 @@ func run() error {
 	upstreamEnabled := flag.Bool("upstream-enabled", upstreamEnabledDefault, "forward normalized current-price snapshots to the shared upstream API")
 	upstreamHistoryEnabled := flag.Bool("upstream-history-enabled", upstreamHistoryEnabledDefault, "forward normalized market history to the shared upstream API")
 	upstreamBaseURL := flag.String("upstream-base-url", envString("UPSTREAM_BASE_URL", ""), "shared upstream API base URL")
-	upstreamToken := flag.String("upstream-token", envString("UPSTREAM_TOKEN", ""), "bearer token used for the shared upstream API")
+	upstreamToken := flag.String("upstream-token", envString("UPSTREAM_TOKEN", ""), "bearer token used for the shared upstream API; prefer --upstream-token-file")
+	upstreamTokenFile := flag.String("upstream-token-file", envString("UPSTREAM_TOKEN_FILE", ""), "path to a file containing the upstream bearer token")
+	upstreamMinTokenLength := flag.Int("upstream-min-token-length", envInt("UPSTREAM_MIN_TOKEN_LENGTH", 32), "minimum accepted bearer-token length")
+	upstreamRequireHTTPS := flag.Bool("upstream-require-https", envBool("UPSTREAM_REQUIRE_HTTPS", upstreamRequireHTTPSDefault), "require HTTPS for upstream requests")
 	upstreamBatchSize := flag.Int("upstream-batch-size", envInt("UPSTREAM_BATCH_SIZE", 500), "maximum number of price entries per upstream batch")
 	upstreamFlushInterval := flag.Duration("upstream-flush-interval", envDuration("UPSTREAM_FLUSH_INTERVAL", 250*time.Millisecond), "maximum time before flushing a price batch")
 	upstreamQueueSize := flag.Int("upstream-queue-size", envInt("UPSTREAM_QUEUE_SIZE", 5000), "buffer size for queued upstream price entries")
@@ -115,11 +120,25 @@ func run() error {
 	var priceForwarder *upstream.Forwarder
 	var historyForwarder *upstream.HistoryForwarder
 	var persistentOutbox *upstream.Outbox
+	upstreamCredentialSource := "disabled"
 	if *upstreamEnabled || *upstreamHistoryEnabled {
-		if strings.TrimSpace(*upstreamToken) == "" {
-			return fmt.Errorf("UPSTREAM_TOKEN is required when upstream forwarding is enabled")
+		credential, err := secrets.ResolveToken(secrets.ResolveOptions{
+			Value:         *upstreamToken,
+			FilePath:      *upstreamTokenFile,
+			MinimumLength: *upstreamMinTokenLength,
+			Production:    strings.EqualFold(*environment, "production"),
+		})
+		if err != nil {
+			return fmt.Errorf("configure upstream credential: %w", err)
 		}
-		client, err := upstream.NewClient(*upstreamBaseURL, *upstreamToken, *upstreamTimeout, *upstreamGzip)
+		upstreamCredentialSource = credential.Source()
+		client, err := upstream.NewClientWithOptions(upstream.ClientOptions{
+			BaseURL:      *upstreamBaseURL,
+			Token:        credential.Value(),
+			Timeout:      *upstreamTimeout,
+			UseGzip:      *upstreamGzip,
+			RequireHTTPS: *upstreamRequireHTTPS,
+		})
 		if err != nil {
 			return fmt.Errorf("configure upstream client: %w", err)
 		}
@@ -226,7 +245,8 @@ func run() error {
 			observability.F("max_retry_delay", *upstreamMaxRetryDelay),
 			observability.F("outbox", *upstreamOutboxPath),
 			observability.F("gzip", *upstreamGzip),
-			observability.F("auth", "token"),
+			observability.F("credential_source", upstreamCredentialSource),
+			observability.F("require_https", *upstreamRequireHTTPS),
 		)
 	}
 	if historyForwarder != nil {
@@ -243,7 +263,8 @@ func run() error {
 			observability.F("max_retry_delay", *upstreamMaxRetryDelay),
 			observability.F("outbox", *upstreamOutboxPath),
 			observability.F("gzip", *upstreamGzip),
-			observability.F("auth", "token"),
+			observability.F("credential_source", upstreamCredentialSource),
+			observability.F("require_https", *upstreamRequireHTTPS),
 		)
 	}
 
@@ -282,7 +303,18 @@ func run() error {
 }
 
 func loadDotEnv() {
-	candidates := []string{".env"}
+	environment := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	loadFiles := environment != "production"
+	if configured := strings.TrimSpace(os.Getenv("LOAD_DOTENV")); configured != "" {
+		if parsed, err := strconv.ParseBool(configured); err == nil {
+			loadFiles = parsed
+		}
+	}
+	if !loadFiles {
+		return
+	}
+
+	candidates := []string{".env.local", ".env"}
 
 	if executablePath, err := os.Executable(); err == nil {
 		executableDir := filepath.Dir(executablePath)

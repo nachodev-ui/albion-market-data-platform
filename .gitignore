@@ -30,3 +30,10 @@ data/normalized-backup-*/
 
 # Formal integration-test runtime and evidence
 .e2e/
+
+# Secretos montados o generados localmente
+/secrets/
+*.token
+*.secret
+
+/albion-market-data-platform.zip

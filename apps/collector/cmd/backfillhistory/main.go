@@ -16,24 +16,27 @@ import (
 	"time"
 
 	"albion-market-data/collector/internal/domain"
+	"albion-market-data/collector/internal/secrets"
 	"albion-market-data/collector/internal/upstream"
 )
 
 type options struct {
-	inputDirectory string
-	baseURL        string
-	token          string
-	server         string
-	from           time.Time
-	to             time.Time
-	batchSize      int
-	maxBuckets     int
-	requestsPerSec float64
-	timeout        time.Duration
-	retryCount     int
-	retryDelay     time.Duration
-	useGzip        bool
-	dryRun         bool
+	inputDirectory   string
+	baseURL          string
+	token            string
+	credentialSource string
+	requireHTTPS     bool
+	server           string
+	from             time.Time
+	to               time.Time
+	batchSize        int
+	maxBuckets       int
+	requestsPerSec   float64
+	timeout          time.Duration
+	retryCount       int
+	retryDelay       time.Duration
+	useGzip          bool
+	dryRun           bool
 }
 
 type counters struct {
@@ -63,7 +66,11 @@ func run() error {
 	defaultFrom := today.AddDate(0, 0, -27).Format("2006-01-02")
 	inputDirectory := flag.String("input-dir", "./data/normalized", "directory containing market-history-*.jsonl")
 	baseURL := flag.String("base-url", envString("UPSTREAM_BASE_URL", "http://127.0.0.1:8080"), "central API base URL")
-	token := flag.String("token", envString("UPSTREAM_TOKEN", ""), "central API bearer token")
+	token := flag.String("token", envString("UPSTREAM_TOKEN", ""), "central API bearer token; prefer --token-file")
+	tokenFile := flag.String("token-file", envString("UPSTREAM_TOKEN_FILE", ""), "path to a file containing the central API bearer token")
+	minimumTokenLength := flag.Int("min-token-length", envInt("UPSTREAM_MIN_TOKEN_LENGTH", 32), "minimum accepted bearer-token length")
+	production := strings.EqualFold(envString("APP_ENV", "development"), "production")
+	requireHTTPS := flag.Bool("require-https", envBool("UPSTREAM_REQUIRE_HTTPS", production), "require HTTPS for the central API")
 	server := flag.String("server", "", "optional server filter: west, east or europe")
 	fromText := flag.String("from", defaultFrom, "inclusive capture date in YYYY-MM-DD")
 	toText := flag.String("to", today.Format("2006-01-02"), "inclusive capture date in YYYY-MM-DD")
@@ -105,25 +112,39 @@ func run() error {
 	if serverValue != "" && serverValue != "west" && serverValue != "east" && serverValue != "europe" {
 		return fmt.Errorf("server must be west, east or europe")
 	}
-	if !*dryRun && strings.TrimSpace(*token) == "" {
-		return fmt.Errorf("token is required unless --dry-run is used")
+	credentialValue := ""
+	credentialSource := "disabled"
+	if !*dryRun {
+		credential, err := secrets.ResolveToken(secrets.ResolveOptions{
+			Value:         *token,
+			FilePath:      *tokenFile,
+			MinimumLength: *minimumTokenLength,
+			Production:    production,
+		})
+		if err != nil {
+			return fmt.Errorf("configure central API credential: %w", err)
+		}
+		credentialValue = credential.Value()
+		credentialSource = credential.Source()
 	}
 
 	opts := options{
-		inputDirectory: *inputDirectory,
-		baseURL:        *baseURL,
-		token:          *token,
-		server:         serverValue,
-		from:           from,
-		to:             to,
-		batchSize:      *batchSize,
-		maxBuckets:     *maxBuckets,
-		requestsPerSec: *requestsPerSec,
-		timeout:        *timeout,
-		retryCount:     *retryCount,
-		retryDelay:     *retryDelay,
-		useGzip:        *useGzip,
-		dryRun:         *dryRun,
+		inputDirectory:   *inputDirectory,
+		baseURL:          *baseURL,
+		token:            credentialValue,
+		credentialSource: credentialSource,
+		requireHTTPS:     *requireHTTPS,
+		server:           serverValue,
+		from:             from,
+		to:               to,
+		batchSize:        *batchSize,
+		maxBuckets:       *maxBuckets,
+		requestsPerSec:   *requestsPerSec,
+		timeout:          *timeout,
+		retryCount:       *retryCount,
+		retryDelay:       *retryDelay,
+		useGzip:          *useGzip,
+		dryRun:           *dryRun,
 	}
 	return execute(context.Background(), opts)
 }
@@ -140,7 +161,13 @@ func execute(ctx context.Context, opts options) error {
 
 	var client *upstream.Client
 	if !opts.dryRun {
-		client, err = upstream.NewClient(opts.baseURL, opts.token, opts.timeout, opts.useGzip)
+		client, err = upstream.NewClientWithOptions(upstream.ClientOptions{
+			BaseURL:      opts.baseURL,
+			Token:        opts.token,
+			Timeout:      opts.timeout,
+			UseGzip:      opts.useGzip,
+			RequireHTTPS: opts.requireHTTPS,
+		})
 		if err != nil {
 			return err
 		}
@@ -190,6 +217,7 @@ func execute(ctx context.Context, opts options) error {
 
 	fmt.Printf("History backfill completed\n")
 	fmt.Printf("  Mode: %s\n", map[bool]string{true: "dry-run", false: "send"}[opts.dryRun])
+	fmt.Printf("  Credential source: %s, require HTTPS: %t\n", opts.credentialSource, opts.requireHTTPS)
 	fmt.Printf("  Range: %s to %s\n", opts.from.Format("2006-01-02"), opts.to.Format("2006-01-02"))
 	fmt.Printf("  Files: %d, lines: %d, matched: %d\n", stats.Files, stats.Lines, stats.Matched)
 	fmt.Printf("  Batches: %d, entries: %d, buckets: %d\n", stats.Batches, stats.Entries, stats.Buckets)
@@ -394,4 +422,28 @@ func envString(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
