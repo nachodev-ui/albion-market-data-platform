@@ -133,3 +133,58 @@ func TestClientSendsHistoryPayloadAndDecodesResponse(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 }
+
+func TestClientRequiresHTTPSWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewClientWithOptions(ClientOptions{
+		BaseURL:      "http://api.example.test",
+		Token:        "secret",
+		RequireHTTPS: true,
+	}); err == nil {
+		t.Fatal("expected HTTPS requirement error")
+	}
+	if _, err := NewClientWithOptions(ClientOptions{
+		BaseURL:      "https://api.example.test",
+		Token:        "secret",
+		RequireHTTPS: true,
+	}); err != nil {
+		t.Fatalf("https client: %v", err)
+	}
+}
+
+func TestClientRejectsCredentialedURL(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewClient("https://user:password@api.example.test", "secret", time.Second, false); err == nil {
+		t.Fatal("expected credentialed URL error")
+	}
+}
+
+func TestClientDoesNotForwardBearerTokenAcrossRedirects(t *testing.T) {
+	t.Parallel()
+
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		targetCalled = true
+	}))
+	defer target.Close()
+
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	client, err := NewClient(redirect.URL, "secret", time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.SendPrices(context.Background(), IngestPricesRequest{RequestID: "request-1", Server: "west"})
+	if err == nil {
+		t.Fatal("expected redirect response to be rejected")
+	}
+	if targetCalled {
+		t.Fatal("redirect target received the request")
+	}
+}

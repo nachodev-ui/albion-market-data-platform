@@ -5,13 +5,24 @@ param(
     [string]$DatabaseUrl = $env:E2E_DATABASE_URL,
     [int]$ApiPort = 18080,
     [int]$ReceiverPort = 18787,
-    [string]$IngestToken = "albion-e2e-local-token",
+    [string]$IngestToken = "",
     [switch]$SkipQuality,
     [switch]$AllowNonE2EDatabase
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($IngestToken)) {
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    } finally {
+        $rng.Dispose()
+    }
+    $IngestToken = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
 
 $PlatformRepo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WorkspaceRoot = Split-Path $PlatformRepo -Parent
@@ -271,6 +282,8 @@ function Start-Api {
         DATABASE_URL = $DatabaseUrl
         INGEST_BEARER_TOKEN = $IngestToken
         INGEST_BEARER_TOKEN_PREVIOUS = ""
+        INGEST_MIN_TOKEN_LENGTH = "32"
+        INGEST_REQUIRE_HTTPS = "false"
         MAX_INGEST_BODY_BYTES = "5242880"
         READ_TIMEOUT = "5s"
         WRITE_TIMEOUT = "10s"
@@ -298,6 +311,8 @@ function Start-Receiver {
         UPSTREAM_HISTORY_ENABLED = "true"
         UPSTREAM_BASE_URL = $ApiBaseUrl
         UPSTREAM_TOKEN = $Token
+        UPSTREAM_MIN_TOKEN_LENGTH = "32"
+        UPSTREAM_REQUIRE_HTTPS = "false"
         UPSTREAM_BATCH_SIZE = "2"
         UPSTREAM_FLUSH_INTERVAL = "50ms"
         UPSTREAM_QUEUE_SIZE = "100"
@@ -658,7 +673,7 @@ restart identity cascade;
 
     Invoke-Scenario "E2E-11" "Errores permanentes terminan en dead_letter" {
         Start-Api
-        Start-Receiver -Token "token-e2e-invalido" -MaxDeliveryAttempts 2
+        Start-Receiver -Token ("invalid-e2e-token-" + ("x" * 40)) -MaxDeliveryAttempts 2
         $deadLetterOrders = @{
             Orders = @(
                 @{ Id = 930000001; ItemTypeId = "T5_BAG"; ItemGroupTypeId = "T5_BAG"; LocationId = "4002"; QualityLevel = 1; EnchantmentLevel = 0; UnitPriceSilver = 230000000; Amount = 3; AuctionType = "offer"; Expires = $expires },

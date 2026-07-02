@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -17,6 +18,14 @@ const (
 	maxErrorBodyBytes   = 4096
 	maxSuccessBodyBytes = 64 << 10
 )
+
+type ClientOptions struct {
+	BaseURL      string
+	Token        string
+	Timeout      time.Duration
+	UseGzip      bool
+	RequireHTTPS bool
+}
 
 type Client struct {
 	baseURL string
@@ -61,19 +70,47 @@ func SendErrorDetails(err error) (statusCode int, duration time.Duration) {
 }
 
 func NewClient(baseURL, token string, timeout time.Duration, useGzip bool) (*Client, error) {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	return NewClientWithOptions(ClientOptions{
+		BaseURL: baseURL,
+		Token:   token,
+		Timeout: timeout,
+		UseGzip: useGzip,
+	})
+}
+
+func NewClientWithOptions(options ClientOptions) (*Client, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(options.BaseURL), "/")
 	if baseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
-	if timeout <= 0 {
-		timeout = 5 * time.Second
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Host == "" {
+		return nil, fmt.Errorf("base URL must be an absolute http or https URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("base URL scheme must be http or https")
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("base URL must not contain user credentials")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("base URL must not contain a query string or fragment")
+	}
+	if options.RequireHTTPS && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("HTTPS is required for the upstream API")
+	}
+	if options.Timeout <= 0 {
+		options.Timeout = 5 * time.Second
 	}
 	return &Client{
 		baseURL: baseURL,
-		token:   strings.TrimSpace(token),
-		useGzip: useGzip,
+		token:   strings.TrimSpace(options.Token),
+		useGzip: options.UseGzip,
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout: options.Timeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}, nil
 }
@@ -121,6 +158,7 @@ func (c *Client) sendJSON(ctx context.Context, path string, payload any, respons
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "albion-market-data-forwarder/1.0")
+	request.Header.Set("Cache-Control", "no-store")
 	if c.token != "" {
 		request.Header.Set("Authorization", "Bearer "+c.token)
 	}
