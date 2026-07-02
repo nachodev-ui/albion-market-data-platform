@@ -32,6 +32,8 @@ data/normalized-backup-*/
 .e2e/
 
 # Secretos montados o generados localmente
-secrets/
+/secrets/
 *.token
 *.secret
+
+/albion-market-data-platform.zip
