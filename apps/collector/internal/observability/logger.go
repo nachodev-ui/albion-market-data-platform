@@ -77,7 +77,7 @@ func (l *Logger) Event(level Level, event string, fields ...Field) {
 		line.WriteByte(' ')
 		line.WriteString(key)
 		line.WriteByte('=')
-		line.WriteString(formatValue(field.Value))
+		line.WriteString(formatField(key, field.Value))
 	}
 	line.WriteByte('\n')
 
@@ -109,6 +109,24 @@ func (l *Logger) formatLevel(level Level) string {
 		code = "36"
 	}
 	return "\x1b[" + code + "m" + label + "\x1b[0m"
+}
+
+func formatField(key string, value any) string {
+	if isSensitiveKey(key) {
+		return strconv.Quote("[REDACTED]")
+	}
+	return formatValue(value)
+}
+
+func isSensitiveKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
+	case "authorization", "proxy_authorization", "database_url", "dsn", "connection_string", "password", "secret", "token":
+		return true
+	}
+	return strings.HasSuffix(normalized, "_token") ||
+		strings.HasSuffix(normalized, "_secret") ||
+		strings.HasSuffix(normalized, "_password")
 }
 
 func formatValue(value any) string {

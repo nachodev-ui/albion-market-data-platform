@@ -208,3 +208,6 @@ Invoke-RestMethod http://127.0.0.1:8787/api/v1/status |
 ```
 
 La guía operativa de recuperación está en `OUTBOX_Y_BACKFILL.md`.
+
+
+La configuración del forwarder registra `credential_source=file|environment` y `require_https`, nunca el token.

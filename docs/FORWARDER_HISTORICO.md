@@ -70,7 +70,9 @@ Las credenciales y transporte se comparten con el forwarder de precios:
 
 ```env
 UPSTREAM_BASE_URL=http://127.0.0.1:8080
-UPSTREAM_TOKEN=CHANGE_ME_STRONG_RANDOM_TOKEN
+UPSTREAM_TOKEN=
+UPSTREAM_TOKEN_FILE=./secrets/upstream-current.token
+UPSTREAM_MIN_TOKEN_LENGTH=32
 UPSTREAM_TIMEOUT=5s
 UPSTREAM_RETRY_COUNT=3
 UPSTREAM_RETRY_DELAY=500ms
@@ -210,3 +212,6 @@ El forwarder opera sobre capturas nuevas. Para cargar los JSONL existentes:
 
 Para todo lo disponible, usa `-All`. Los `request_id` del backfill son
 deterministas, por lo que repetir el mismo rango es idempotente.
+
+
+La rotación y el uso de archivos montados se describen en `SEGURIDAD_SECRETOS.md`.

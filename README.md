@@ -216,7 +216,9 @@ Configuración mínima:
 UPSTREAM_ENABLED=true
 UPSTREAM_HISTORY_ENABLED=true
 UPSTREAM_BASE_URL=http://127.0.0.1:8080
-UPSTREAM_TOKEN=EL_MISMO_TOKEN_DE_ALBION_MARKET_API
+UPSTREAM_TOKEN=
+UPSTREAM_TOKEN_FILE=./secrets/upstream-current.token
+UPSTREAM_MIN_TOKEN_LENGTH=32
 ```
 
 Prueba end-to-end:
@@ -225,7 +227,8 @@ Prueba end-to-end:
 .\scripts\verify-history-forwarder.ps1
 ```
 
-La guía completa está en `docs/FORWARDER_HISTORICO.md`.
+La guía completa está en `docs/FORWARDER_HISTORICO.md`. La generación y
+rotación segura de la credencial se documenta en `docs/SEGURIDAD_SECRETOS.md`.
 
 ## Outbox persistente y recuperación
 

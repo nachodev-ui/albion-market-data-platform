@@ -65,3 +65,24 @@ func TestLoggerConcurrentWritesAreCompleteLines(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggerRedactsSensitiveFields(t *testing.T) {
+	var output bytes.Buffer
+	logger := NewLogger(&output, "never")
+	logger.Event(LevelInfo, "security.test",
+		F("upstream_token", "super-secret-value"),
+		F("authorization", "Bearer secret"),
+		F("credential_source", "file"),
+	)
+
+	line := output.String()
+	if strings.Contains(line, "super-secret-value") || strings.Contains(line, "Bearer secret") {
+		t.Fatalf("sensitive value leaked: %q", line)
+	}
+	if strings.Count(line, `"[REDACTED]"`) != 2 {
+		t.Fatalf("redactions = %q, want two", line)
+	}
+	if !strings.Contains(line, `credential_source="file"`) {
+		t.Fatalf("safe metadata missing: %q", line)
+	}
+}
