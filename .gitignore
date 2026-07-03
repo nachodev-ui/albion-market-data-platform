@@ -40,3 +40,9 @@ data/normalized-backup-*/
 
 # Generated source packages and release evidence
 /artifacts/
+
+# Durable storage recovery artifacts
+data/**/*.bak
+data/**/*.corrupt-*
+data/**/*.truncated-*
+data/**/.receiver.lock
