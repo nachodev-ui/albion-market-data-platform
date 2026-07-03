@@ -1,3 +1,4 @@
+# Performance validation for fictional Albion Online game data.
 name: Receiver performance baseline
 
 on:
@@ -10,7 +11,7 @@ on:
       - apps/collector/cmd/perfbaseline/**
       - apps/collector/internal/**
       - scripts/benchmark-receiver-baseline.ps1
-      - performance/**
+      - docs/RENDIMIENTO_BASELINE_COMPLETO.md
       - .github/workflows/performance-baseline.yml
   push:
     branches:
@@ -20,7 +21,7 @@ on:
       - apps/collector/cmd/perfbaseline/**
       - apps/collector/internal/**
       - scripts/benchmark-receiver-baseline.ps1
-      - performance/**
+      - docs/RENDIMIENTO_BASELINE_COMPLETO.md
       - .github/workflows/performance-baseline.yml
 
 permissions:
@@ -52,6 +53,32 @@ jobs:
       - name: Run comprehensive baseline
         shell: pwsh
         run: ./scripts/benchmark-receiver-baseline.ps1 -Samples 5
+
+      - name: Validate observed receiver limits
+        shell: pwsh
+        run: |
+          $baseline = Get-ChildItem ./artifacts/receiver-performance-baseline/*/baseline.json |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          $report = Get-Content $baseline.FullName -Raw | ConvertFrom-Json
+          if ($report.scenarios.Count -lt 20) {
+            throw "expected at least 20 performance scenarios"
+          }
+          foreach ($scenario in $report.scenarios) {
+            if ([double]$scenario.p95_ms -gt 300.0) {
+              throw "$($scenario.name) exceeded the observed 300 ms p95 ceiling"
+            }
+            if ([double]$scenario.alloc_bytes_per_op -gt 130000000.0) {
+              throw "$($scenario.name) exceeded the 130 MB allocation ceiling"
+            }
+            if ($null -ne $scenario.artifacts_bytes) {
+              foreach ($artifact in $scenario.artifacts_bytes.PSObject.Properties) {
+                if ([long]$artifact.Value -gt 6000000L) {
+                  throw "$($scenario.name) artifact $($artifact.Name) exceeded 6 MB"
+                }
+              }
+            }
+          }
 
       - name: Upload local baseline and profiles
         if: always()
@@ -147,6 +174,30 @@ jobs:
             -Rounds 20 `
             -Token performance-integration-token-20260703 `
             -OutputDirectory ./platform/artifacts/postgres-round-trip
+
+      - name: Validate observed PostgreSQL limits
+        shell: pwsh
+        run: |
+          $summary = Get-ChildItem ./platform/artifacts/postgres-round-trip/*-summary.csv |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          $rows = Import-Csv $summary.FullName
+          $limits = @{
+            "insert-new" = 100.0
+            "update-newer" = 100.0
+            "no-change" = 75.0
+            "duplicate" = 30.0
+          }
+          foreach ($phase in $limits.Keys) {
+            $row = $rows | Where-Object phase -eq $phase | Select-Object -First 1
+            if ($null -eq $row -or $row.all_valid -ne "True") {
+              throw "invalid PostgreSQL performance phase: $phase"
+            }
+            $p95 = [double]::Parse($row.p95_ms, [Globalization.CultureInfo]::InvariantCulture)
+            if ($p95 -gt $limits[$phase]) {
+              throw "$phase p95=$p95 ms exceeded $($limits[$phase]) ms"
+            }
+          }
 
       - name: Upload PostgreSQL measurements
         if: always()
