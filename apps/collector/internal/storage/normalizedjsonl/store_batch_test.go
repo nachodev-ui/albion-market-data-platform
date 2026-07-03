@@ -58,8 +58,13 @@ func TestAppendOrdersBatchesAndDeduplicatesWithinInput(t *testing.T) {
 	}
 }
 
-func BenchmarkAppendOrders1000(b *testing.B) { benchmarkAppendOrders(b, 1000) }
-func BenchmarkAppendOrders10000(b *testing.B) { benchmarkAppendOrders(b, 10000) }
+func BenchmarkAppendOrders1000(b *testing.B) {
+	benchmarkAppendOrders(b, 1000)
+}
+
+func BenchmarkAppendOrders10000(b *testing.B) {
+	benchmarkAppendOrders(b, 10000)
+}
 
 func benchmarkAppendOrders(b *testing.B, count int) {
 	orders := testOrders(count)
@@ -85,11 +90,20 @@ func testOrders(count int) []domain.NormalizedMarketOrder {
 		id := int64(index + 1)
 		orders[index] = domain.NormalizedMarketOrder{
 			SchemaVersion: domain.NormalizedSchemaVersion,
-			Kind: "market-order", Source: "benchmark", Server: "west", CapturedAt: capturedAt,
-			OrderID: id, Item: domain.ItemDimension{ID: fmt.Sprintf("T4_ITEM_%d", index%100)},
-			Location: domain.LocationDimension{ID: "3005", Name: "Caerleon"},
-			Quality: domain.QualityDimension{ID: 1, Name: "Normal"}, AuctionType: "offer", Side: "sell",
-			UnitPrice: 1000 + id, Amount: 1, ExpiresAt: expiresAt, DedupeKey: fmt.Sprintf("order-%d", id),
+			Kind:          "market-order",
+			Source:        "benchmark",
+			Server:        "west",
+			CapturedAt:    capturedAt,
+			OrderID:       id,
+			Item:          domain.ItemDimension{ID: fmt.Sprintf("T4_ITEM_%d", index%100)},
+			Location:      domain.LocationDimension{ID: "3005", Name: "Caerleon"},
+			Quality:       domain.QualityDimension{ID: 1, Name: "Normal"},
+			AuctionType:   "offer",
+			Side:          "sell",
+			UnitPrice:     1000 + id,
+			Amount:        1,
+			ExpiresAt:     expiresAt,
+			DedupeKey:     fmt.Sprintf("order-%d", id),
 		}
 	}
 	return orders
