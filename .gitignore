@@ -26,7 +26,7 @@ Thumbs.db
 # Runtime logs and generated backups
 albiondata-client.log*
 data/normalized-backup-*/
-
+/backups/
 
 # Formal integration-test runtime and evidence
 .e2e/
