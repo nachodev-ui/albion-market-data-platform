@@ -1,0 +1,55 @@
+name: Local API contracts
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - openapi/**
+      - apps/collector/internal/httpapi/**
+      - apps/collector/internal/domain/**
+      - apps/collector/internal/storage/queryjsonl/**
+      - apps/collector/internal/upstream/**
+      - apps/collector/cmd/receiver/**
+      - .github/workflows/contracts.yml
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - openapi/**
+      - apps/collector/internal/httpapi/**
+      - apps/collector/internal/domain/**
+      - apps/collector/internal/storage/queryjsonl/**
+      - apps/collector/internal/upstream/**
+      - apps/collector/cmd/receiver/**
+      - .github/workflows/contracts.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-api-contracts-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: OpenAPI and Go contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/collector
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/collector/go.mod
+          cache-dependency-path: apps/collector/go.sum
+
+      - name: Verify OpenAPI syntax, routes and JSON schemas
+        run: go test ./internal/httpapi -run TestOpenAPI -count=1

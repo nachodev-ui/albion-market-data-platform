@@ -2,11 +2,9 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +13,31 @@ import (
 	"albion-market-data/collector/internal/storage/queryjsonl"
 	"albion-market-data/collector/internal/upstream"
 )
+
+const (
+	RouteHealth  = "/healthz"
+	RouteReady   = "/readyz"
+	RouteStatus  = "/api/v1/status"
+	RouteMarkets = "/api/v1/markets"
+	RoutePrices  = "/api/v1/prices"
+	RouteHistory = "/api/v1/history"
+	RouteOrders  = "/api/v1/orders"
+
+	defaultMaxQueryBytes  = 16 << 10
+	defaultMaxQueryValues = 256
+	maxQueryKeyBytes      = 64
+	maxQueryValueBytes    = 4096
+)
+
+var DocumentedGETRoutes = []string{
+	RouteHealth,
+	RouteReady,
+	RouteStatus,
+	RouteMarkets,
+	RoutePrices,
+	RouteHistory,
+	RouteOrders,
+}
 
 type Repository interface {
 	ListHistories(context.Context, queryjsonl.HistoryFilter) ([]domain.NormalizedHistory, error)
@@ -41,6 +64,9 @@ type StatusConfig struct {
 	ForwarderQueueCapacity        int
 	HistoryForwarder              HistoryForwarderStatusProvider
 	HistoryForwarderQueueCapacity int
+	AllowedOrigins                []string
+	MaxQueryBytes                 int
+	MaxQueryValues                int
 }
 
 type Handler struct {
@@ -54,6 +80,9 @@ type Handler struct {
 	forwarderQueueCapacity        int
 	historyForwarder              HistoryForwarderStatusProvider
 	historyForwarderQueueCapacity int
+	allowedOrigins                map[string]struct{}
+	maxQueryBytes                 int
+	maxQueryValues                int
 }
 
 func NewHandler(repository Repository, marketCatalog *catalog.Catalog, statusConfigs ...StatusConfig) (*Handler, error) {
@@ -64,9 +93,12 @@ func NewHandler(repository Repository, marketCatalog *catalog.Catalog, statusCon
 		return nil, fmt.Errorf("market catalog is required")
 	}
 	config := StatusConfig{
-		ServiceName: "albion-market-data-platform",
-		Environment: "development",
-		StartedAt:   time.Now().UTC(),
+		ServiceName:    "albion-market-data-platform",
+		Environment:    "development",
+		StartedAt:      time.Now().UTC(),
+		AllowedOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},
+		MaxQueryBytes:  defaultMaxQueryBytes,
+		MaxQueryValues: defaultMaxQueryValues,
 	}
 	if len(statusConfigs) > 0 {
 		provided := statusConfigs[0]
@@ -87,6 +119,22 @@ func NewHandler(repository Repository, marketCatalog *catalog.Catalog, statusCon
 		}
 		config.ForwarderQueueCapacity = provided.ForwarderQueueCapacity
 		config.HistoryForwarderQueueCapacity = provided.HistoryForwarderQueueCapacity
+		if provided.AllowedOrigins != nil {
+			config.AllowedOrigins = append([]string(nil), provided.AllowedOrigins...)
+		}
+		if provided.MaxQueryBytes > 0 {
+			config.MaxQueryBytes = provided.MaxQueryBytes
+		}
+		if provided.MaxQueryValues > 0 {
+			config.MaxQueryValues = provided.MaxQueryValues
+		}
+	}
+	allowedOrigins := make(map[string]struct{}, len(config.AllowedOrigins))
+	for _, origin := range config.AllowedOrigins {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			allowedOrigins[origin] = struct{}{}
+		}
 	}
 	return &Handler{
 		repository:                    repository,
@@ -99,283 +147,51 @@ func NewHandler(repository Repository, marketCatalog *catalog.Catalog, statusCon
 		forwarderQueueCapacity:        config.ForwarderQueueCapacity,
 		historyForwarder:              config.HistoryForwarder,
 		historyForwarderQueueCapacity: config.HistoryForwarderQueueCapacity,
+		allowedOrigins:                allowedOrigins,
+		maxQueryBytes:                 config.MaxQueryBytes,
+		maxQueryValues:                config.MaxQueryValues,
 	}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	setSecurityHeaders(w)
+	if !h.applyCORS(w, r) {
+		return
+	}
+	if !isDocumentedRoute(r.URL.Path) {
+		writeError(w, http.StatusNotFound, "endpoint not found")
+		return
+	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		w.Header().Set("Allow", "GET, OPTIONS")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if status, err := h.validateQuery(r.URL); err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
 
 	switch r.URL.Path {
-	case "/api/v1/history":
+	case RouteHealth:
+		h.health(w)
+	case RouteReady:
+		h.readiness(w)
+	case RouteHistory:
 		h.listHistory(w, r)
-	case "/api/v1/orders":
+	case RouteOrders:
 		h.listOrders(w, r)
-	case "/api/v1/prices":
+	case RoutePrices:
 		h.listPrices(w, r)
-	case "/api/v1/status":
+	case RouteStatus:
 		h.status(w)
-	case "/api/v1/markets":
+	case RouteMarkets:
 		h.listMarkets(w, r)
-	default:
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "endpoint not found"})
 	}
-}
-
-func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request) {
-	quality, err := parseUint8(r.URL.Query().Get("quality"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	limit, err := parseLimit(r.URL.Query().Get("limit"), 500)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	server, err := parseServer(r.URL.Query().Get("server"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	locationID, locationName, _, err := h.resolveLocation(r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	records, err := h.repository.ListHistories(r.Context(), queryjsonl.HistoryFilter{
-		Server:       server,
-		ItemID:       strings.TrimSpace(r.URL.Query().Get("itemId")),
-		LocationID:   locationID,
-		LocationName: locationName,
-		Quality:      quality,
-		Period:       strings.TrimSpace(r.URL.Query().Get("period")),
-		Limit:        limit,
-	})
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not query normalized history"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"count":  len(records),
-		"data":   records,
-		"source": "local-market-service",
-	})
-}
-
-func (h *Handler) listOrders(w http.ResponseWriter, r *http.Request) {
-	quality, err := parseUint8(r.URL.Query().Get("quality"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	limit, err := parseLimit(r.URL.Query().Get("limit"), 5000)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	server, err := parseServer(r.URL.Query().Get("server"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	locationID, locationName, _, err := h.resolveLocation(r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	records, err := h.repository.ListOrders(r.Context(), queryjsonl.OrderFilter{
-		Server:       server,
-		ItemID:       strings.TrimSpace(r.URL.Query().Get("itemId")),
-		LocationID:   locationID,
-		LocationName: locationName,
-		Quality:      quality,
-		AuctionType:  strings.TrimSpace(r.URL.Query().Get("auctionType")),
-		Side:         strings.TrimSpace(r.URL.Query().Get("side")),
-		Limit:        limit,
-	})
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not query normalized orders"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"count":  len(records),
-		"data":   records,
-		"source": "local-market-service",
-	})
-}
-
-const priceSnapshotWindow = 2 * time.Minute
-
-type priceRow struct {
-	Server           string                   `json:"server"`
-	ItemIdentifier   string                   `json:"itemIdentifier"`
-	MarketKey        string                   `json:"marketKey,omitempty"`
-	Location         domain.LocationDimension `json:"location"`
-	Quality          uint8                    `json:"quality"`
-	SellPriceMin     *int64                   `json:"sellPriceMin"`
-	SellPriceMinDate *time.Time               `json:"sellPriceMinDate"`
-	BuyPriceMax      *int64                   `json:"buyPriceMax"`
-	BuyPriceMaxDate  *time.Time               `json:"buyPriceMaxDate"`
-}
-
-func (h *Handler) listPrices(w http.ResponseWriter, r *http.Request) {
-	quality, err := parseUint8(r.URL.Query().Get("quality"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if quality == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "quality is required"})
-		return
-	}
-	server, err := parseServer(r.URL.Query().Get("server"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	itemIDs := parseCSV(r.URL.Query().Get("itemIds"))
-	if len(itemIDs) == 0 {
-		itemIDs = parseCSV(r.URL.Query().Get("itemId"))
-	}
-	if len(itemIDs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "itemIds is required"})
-		return
-	}
-	if len(itemIDs) > 200 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "itemIds accepts at most 200 identifiers"})
-		return
-	}
-
-	locationID, locationName, market, err := h.resolveLocation(r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if locationID == "" && locationName == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "marketKey, location or locationId is required"})
-		return
-	}
-
-	now := h.now().UTC()
-	rows := make([]priceRow, 0, len(itemIDs))
-	for _, itemID := range itemIDs {
-		orders, err := h.repository.ListOrders(r.Context(), queryjsonl.OrderFilter{
-			Server:       server,
-			ItemID:       itemID,
-			LocationID:   locationID,
-			LocationName: locationName,
-			Quality:      quality,
-			Limit:        5000,
-		})
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not calculate current prices"})
-			return
-		}
-
-		row := priceRow{
-			Server:         server,
-			ItemIdentifier: itemID,
-			Location: domain.LocationDimension{
-				ID:   locationID,
-				Name: locationName,
-			},
-			Quality: quality,
-		}
-		if market != nil {
-			row.MarketKey = market.Key
-			row.Location.MarketKey = market.Key
-		}
-		latestCaptureBySide := map[string]time.Time{}
-		for _, order := range orders {
-			if order.Amount <= 0 || !order.ExpiresAt.After(now) {
-				continue
-			}
-			if order.CapturedAt.After(latestCaptureBySide[order.Side]) {
-				latestCaptureBySide[order.Side] = order.CapturedAt
-			}
-		}
-
-		for _, order := range orders {
-			if order.Amount <= 0 || !order.ExpiresAt.After(now) {
-				continue
-			}
-			latestCapture := latestCaptureBySide[order.Side]
-			if latestCapture.IsZero() || order.CapturedAt.Before(latestCapture.Add(-priceSnapshotWindow)) {
-				continue
-			}
-			if row.Location.ID == "" {
-				row.Location.ID = order.Location.ID
-			}
-			if row.Location.Name == "" {
-				row.Location.Name = order.Location.Name
-			}
-			switch order.Side {
-			case "sell":
-				if row.SellPriceMin == nil || order.UnitPrice < *row.SellPriceMin {
-					price := order.UnitPrice
-					capturedAt := order.CapturedAt
-					row.SellPriceMin = &price
-					row.SellPriceMinDate = &capturedAt
-				}
-			case "buy":
-				if row.BuyPriceMax == nil || order.UnitPrice > *row.BuyPriceMax {
-					price := order.UnitPrice
-					capturedAt := order.CapturedAt
-					row.BuyPriceMax = &price
-					row.BuyPriceMaxDate = &capturedAt
-				}
-			}
-		}
-		rows = append(rows, row)
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"count":        len(rows),
-		"data":         rows,
-		"source":       "local-market-service",
-		"calculatedAt": now,
-	})
-}
-
-func (h *Handler) listMarkets(w http.ResponseWriter, r *http.Request) {
-	includeDisabled := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("includeDisabled")), "true")
-	markets := h.marketCatalog.Markets(includeDisabled)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"count":  len(markets),
-		"data":   markets,
-		"source": "local-market-service",
-	})
-}
-
-func (h *Handler) resolveLocation(r *http.Request) (string, string, *domain.MarketDefinition, error) {
-	marketKey := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("marketKey")))
-	if marketKey != "" {
-		market, ok := h.marketCatalog.Market(marketKey)
-		if !ok {
-			return "", "", nil, fmt.Errorf("unknown marketKey %q", marketKey)
-		}
-		if !market.Enabled {
-			return "", "", nil, fmt.Errorf("market %q is not enabled", marketKey)
-		}
-		if market.MarketLocationID == nil || strings.TrimSpace(*market.MarketLocationID) == "" {
-			return "", "", nil, fmt.Errorf("market %q has no observed market location yet", marketKey)
-		}
-		return *market.MarketLocationID, market.Name, &market, nil
-	}
-
-	locationID := strings.TrimSpace(r.URL.Query().Get("locationId"))
-	locationName := strings.TrimSpace(r.URL.Query().Get("location"))
-	return locationID, locationName, nil, nil
 }
 
 func isNilProvider(provider any) bool {
@@ -389,117 +205,4 @@ func isNilProvider(provider any) bool {
 	default:
 		return false
 	}
-}
-
-type statusResponse struct {
-	Status           string                            `json:"status"`
-	Service          string                            `json:"service"`
-	Environment      string                            `json:"environment"`
-	Source           string                            `json:"source"`
-	UptimeSeconds    int64                             `json:"uptime_seconds"`
-	Repository       *queryjsonl.RepositoryStats       `json:"repository,omitempty"`
-	Forwarder        upstream.ForwarderSnapshot        `json:"forwarder"`
-	PriceForwarder   upstream.ForwarderSnapshot        `json:"price_forwarder"`
-	HistoryForwarder upstream.HistoryForwarderSnapshot `json:"history_forwarder"`
-}
-
-func (h *Handler) status(w http.ResponseWriter) {
-	now := h.now().UTC()
-	uptime := now.Sub(h.startedAt)
-	if uptime < 0 {
-		uptime = 0
-	}
-
-	priceForwarder := upstream.DisabledSnapshot(h.forwarderQueueCapacity)
-	if !isNilProvider(h.forwarder) {
-		priceForwarder = h.forwarder.Snapshot()
-	}
-	historyForwarder := upstream.DisabledHistorySnapshot(h.historyForwarderQueueCapacity)
-	if !isNilProvider(h.historyForwarder) {
-		historyForwarder = h.historyForwarder.Snapshot()
-	}
-
-	status := "ok"
-	if forwarderIsDegraded(priceForwarder.Enabled, priceForwarder.Status) ||
-		forwarderIsDegraded(historyForwarder.Enabled, historyForwarder.Status) {
-		status = "degraded"
-	}
-
-	payload := statusResponse{
-		Status:           status,
-		Service:          h.serviceName,
-		Environment:      h.environment,
-		Source:           "local-market-service",
-		UptimeSeconds:    int64(uptime / time.Second),
-		Forwarder:        priceForwarder,
-		PriceForwarder:   priceForwarder,
-		HistoryForwarder: historyForwarder,
-	}
-	if provider, ok := h.repository.(statsProvider); ok {
-		stats := provider.Stats()
-		payload.Repository = &stats
-	}
-	writeJSON(w, http.StatusOK, payload)
-}
-
-func forwarderIsDegraded(enabled bool, status string) bool {
-	return enabled && (status == "degraded" || status == "stopped")
-}
-
-func parseUint8(value string) (uint8, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, nil
-	}
-	parsed, err := strconv.ParseUint(value, 10, 8)
-	if err != nil || parsed < 1 || parsed > 5 {
-		return 0, fmt.Errorf("quality must be an integer between 1 and 5")
-	}
-	return uint8(parsed), nil
-}
-
-func parseLimit(value string, maximum int) (int, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 100, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 1 || parsed > maximum {
-		return 0, fmt.Errorf("limit must be an integer between 1 and %d", maximum)
-	}
-	return parsed, nil
-}
-
-func parseServer(value string) (string, error) {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return "", nil
-	}
-	if value != "west" && value != "east" && value != "europe" {
-		return "", fmt.Errorf("server must be west, east or europe")
-	}
-	return value, nil
-}
-
-func parseCSV(value string) []string {
-	seen := make(map[string]struct{})
-	result := make([]string, 0)
-	for _, candidate := range strings.Split(value, ",") {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if _, exists := seen[candidate]; exists {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		result = append(result, candidate)
-	}
-	return result
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
 }
