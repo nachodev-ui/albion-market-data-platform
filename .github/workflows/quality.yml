@@ -33,15 +33,24 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          forbidden="$(git ls-files | grep -E '(^|/)\.env($|\.)|^secrets/|\.(token|secret)$' | grep -Ev '(^|/)\.env\.example$' || true)"
+          forbidden="$(git ls-files | grep -E '(^|/)\.env($|\.)|^secrets/|\.(token|secret)$|(^|/)[^/]*\.exe$|^bin/|^albiondata-client\.log|^data/.*\.(json|jsonl)$' | grep -Ev '(^|/)\.env\.example$' || true)"
           if [[ -n "$forbidden" ]]; then
             printf 'Forbidden secret-bearing files are tracked:\n%s\n' "$forbidden"
             exit 1
           fi
-          if git grep -nE -e '-----BEGIN ([A-Z ]+ )?PRIVATE KEY-----' -- . ':!*.md'; then
+          if git grep -nE -e '-----BEGIN ([A-Z ]+ )?PRIVATE KEY-----' -- .; then
             echo 'A private key marker was found in tracked source files.'
             exit 1
           fi
+          if git grep -nE -e 'gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}|AKIA[0-9A-Z]{16}' -- .; then
+            echo 'A known secret-token pattern was found in tracked source files.'
+            exit 1
+          fi
+
+      - name: Build and verify safe source package
+        shell: pwsh
+        working-directory: .
+        run: ./scripts/export-source.ps1 -OutputPath "$env:RUNNER_TEMP/albion-market-data-platform-source.zip"
 
       - name: Set up Go
         uses: actions/setup-go@v6
