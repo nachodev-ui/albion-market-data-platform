@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "scenarios": {
+    "normalize_orders_1000": {
+      "max_p95_ms": 10,
+      "max_alloc_bytes_per_op": 2000000,
+      "min_counters": { "orders": 1000 },
+      "max_counters": { "orders": 1000 }
+    },
+    "serialize_orders_1000": {
+      "max_p95_ms": 20,
+      "max_alloc_bytes_per_op": 6000000,
+      "max_artifacts_bytes": { "json_payload": 600000 }
+    },
+    "append_normalized_jsonl_1000": {
+      "max_p95_ms": 40,
+      "max_alloc_bytes_per_op": 8000000,
+      "max_artifacts_bytes": { "normalized_jsonl": 600000 },
+      "min_counters": { "written": 1000 },
+      "max_counters": { "written": 1000 }
+    },
+    "update_localdb_1000": {
+      "max_p95_ms": 30,
+      "max_alloc_bytes_per_op": 7000000,
+      "max_artifacts_bytes": { "local_database": 600000 },
+      "min_counters": { "written": 1000 },
+      "max_counters": { "written": 1000 }
+    },
+    "capture_orders_1000": {
+      "max_p95_ms": 50,
+      "max_alloc_bytes_per_op": 18000000,
+      "max_artifacts_bytes": { "local_database": 600000, "normalized_jsonl": 600000 },
+      "min_counters": { "received": 1000, "stored": 1000 },
+      "max_counters": { "received": 1000, "stored": 1000 }
+    },
+    "enqueue_outbox_1000": {
+      "max_p95_ms": 40,
+      "max_alloc_bytes_per_op": 5000000,
+      "max_artifacts_bytes": { "outbox_state": 450000 },
+      "min_counters": { "accepted": 1000, "depth": 1000 },
+      "max_counters": { "accepted": 1000, "depth": 1000 }
+    },
+    "restart_outbox_1000": {
+      "max_p95_ms": 30,
+      "max_alloc_bytes_per_op": 2500000,
+      "max_artifacts_bytes": { "outbox_state": 450000 },
+      "min_counters": { "pending_entries": 1000 },
+      "max_counters": { "pending_entries": 1000 }
+    },
+    "normalize_orders_10000": {
+      "max_p95_ms": 80,
+      "max_alloc_bytes_per_op": 20000000,
+      "min_counters": { "orders": 10000 },
+      "max_counters": { "orders": 10000 }
+    },
+    "serialize_orders_10000": {
+      "max_p95_ms": 100,
+      "max_alloc_bytes_per_op": 50000000,
+      "max_artifacts_bytes": { "json_payload": 6000000 }
+    },
+    "append_normalized_jsonl_10000": {
+      "max_p95_ms": 150,
+      "max_alloc_bytes_per_op": 100000000,
+      "max_artifacts_bytes": { "normalized_jsonl": 6000000 },
+      "min_counters": { "written": 10000 },
+      "max_counters": { "written": 10000 }
+    },
+    "update_localdb_10000": {
+      "max_p95_ms": 150,
+      "max_alloc_bytes_per_op": 60000000,
+      "max_artifacts_bytes": { "local_database": 6000000 },
+      "min_counters": { "written": 10000 },
+      "max_counters": { "written": 10000 }
+    },
+    "capture_orders_10000": {
+      "max_p95_ms": 300,
+      "max_alloc_bytes_per_op": 130000000,
+      "max_artifacts_bytes": { "local_database": 6000000, "normalized_jsonl": 6000000 },
+      "min_counters": { "received": 10000, "stored": 10000 },
+      "max_counters": { "received": 10000, "stored": 10000 }
+    },
+    "enqueue_outbox_10000": {
+      "max_p95_ms": 150,
+      "max_alloc_bytes_per_op": 50000000,
+      "max_artifacts_bytes": { "outbox_state": 4000000 },
+      "min_counters": { "accepted": 10000, "depth": 10000 },
+      "max_counters": { "accepted": 10000, "depth": 10000 }
+    },
+    "restart_outbox_10000": {
+      "max_p95_ms": 150,
+      "max_alloc_bytes_per_op": 20000000,
+      "max_artifacts_bytes": { "outbox_state": 4000000 },
+      "min_counters": { "pending_entries": 10000 },
+      "max_counters": { "pending_entries": 10000 }
+    },
+    "normalize_history_68_buckets": {
+      "max_p95_ms": 5,
+      "max_alloc_bytes_per_op": 1000000,
+      "min_counters": { "buckets": 68 },
+      "max_counters": { "buckets": 68 }
+    },
+    "serialize_history_68_buckets": {
+      "max_p95_ms": 5,
+      "max_alloc_bytes_per_op": 1000000,
+      "max_artifacts_bytes": { "json_payload": 10000 }
+    },
+    "append_history_68_buckets": {
+      "max_p95_ms": 15,
+      "max_alloc_bytes_per_op": 1000000,
+      "max_artifacts_bytes": { "history_jsonl": 10000 },
+      "min_counters": { "buckets": 68, "stored": 1 },
+      "max_counters": { "buckets": 68, "stored": 1 }
+    },
+    "read_prices_100": {
+      "max_p95_ms": 100,
+      "max_alloc_bytes_per_op": 40000000,
+      "min_counters": { "rows": 100 },
+      "max_counters": { "rows": 100 }
+    },
+    "read_history_100": {
+      "max_p95_ms": 10,
+      "max_alloc_bytes_per_op": 1000000,
+      "min_counters": { "rows": 100 },
+      "max_counters": { "rows": 100 }
+    },
+    "recover_after_upstream_error_1000": {
+      "max_p95_ms": 100,
+      "max_alloc_bytes_per_op": 15000000,
+      "max_artifacts_bytes": { "outbox_state": 10000 },
+      "min_counters": { "completed_batches": 1, "queue_high_watermark": 1000, "rescheduled_batches": 1 },
+      "max_counters": { "queue_high_watermark": 1000 }
+    }
+  }
+}
