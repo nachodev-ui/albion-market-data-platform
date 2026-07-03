@@ -30,7 +30,7 @@ func benchmarkHistoryCapture(bucketCount int) domain.CapturedHistory {
 		points[index] = &domain.MarketHistory{
 			ItemAmount:   int64(index + 1),
 			SilverAmount: uint64(index+1) * 10_000_000,
-			Timestamp:    uint64(capturedAt.Add(-time.Duration(index)*6*time.Hour).Unix()),
+			Timestamp:    uint64(capturedAt.Add(-time.Duration(index) * 6 * time.Hour).Unix()),
 		}
 	}
 	return domain.CapturedHistory{
