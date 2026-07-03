@@ -37,3 +37,6 @@ data/normalized-backup-*/
 *.secret
 
 /albion-market-data-platform.zip
+
+# Generated source packages and release evidence
+/artifacts/
