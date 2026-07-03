@@ -21,6 +21,11 @@ const (
 	silverWireScale      uint64 = 10_000
 )
 
+var albionTimeLayouts = [...]string{
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02T15:04:05",
+}
+
 type Store interface {
 	AppendHistory(ctx context.Context, history domain.NormalizedHistory) (bool, error)
 	AppendOrders(ctx context.Context, orders []domain.NormalizedMarketOrder) (written int, duplicates int, err error)
@@ -175,12 +180,15 @@ func (s *Service) NormalizeOrders(source, server string, capturedAt time.Time, u
 		return nil, fmt.Errorf("capturedAt is required")
 	}
 
+	capturedAt = capturedAt.UTC()
 	result := make([]domain.NormalizedMarketOrder, 0, len(upload.Orders))
 	for index, raw := range upload.Orders {
 		if raw == nil {
 			return nil, fmt.Errorf("orders[%d] cannot be null", index)
 		}
-		if raw.ID <= 0 || strings.TrimSpace(raw.ItemTypeID) == "" || strings.TrimSpace(raw.LocationID) == "" {
+		itemID := strings.TrimSpace(raw.ItemTypeID)
+		locationID := strings.TrimSpace(raw.LocationID)
+		if raw.ID <= 0 || itemID == "" || locationID == "" {
 			return nil, fmt.Errorf("orders[%d] is missing id, item or location", index)
 		}
 		if raw.UnitPriceSilver < 0 || raw.Amount < 0 {
@@ -197,9 +205,9 @@ func (s *Service) NormalizeOrders(source, server string, capturedAt time.Time, u
 		if err != nil {
 			return nil, fmt.Errorf("orders[%d].Expires: %w", index, err)
 		}
-		item, ok := s.catalog.ItemByID(raw.ItemTypeID)
+		item, ok := s.catalog.ItemByID(itemID)
 		if !ok {
-			item = domain.ItemDimension{ID: raw.ItemTypeID}
+			item = domain.ItemDimension{ID: itemID}
 		}
 		side := "unknown"
 		switch raw.AuctionType {
@@ -213,12 +221,12 @@ func (s *Service) NormalizeOrders(source, server string, capturedAt time.Time, u
 			Kind:             "market-order",
 			Source:           source,
 			Server:           server,
-			CapturedAt:       capturedAt.UTC(),
+			CapturedAt:       capturedAt,
 			OrderID:          raw.ID,
 			Item:             item,
 			ItemGroupID:      raw.ItemGroupTypeID,
 			EnchantmentLevel: raw.EnchantmentLevel,
-			Location:         s.catalog.CanonicalMarketLocation(raw.LocationID),
+			Location:         s.catalog.CanonicalMarketLocation(locationID),
 			Quality:          quality,
 			AuctionType:      raw.AuctionType,
 			Side:             side,
@@ -277,11 +285,7 @@ func parseAlbionTime(value string) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return parsed.UTC(), nil
 	}
-	layouts := []string{
-		"2006-01-02T15:04:05.999999999",
-		"2006-01-02T15:04:05",
-	}
-	for _, layout := range layouts {
+	for _, layout := range albionTimeLayouts {
 		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
 			return parsed.UTC(), nil
 		}
