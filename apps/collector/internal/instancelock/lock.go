@@ -19,8 +19,6 @@ import (
 
 var ErrAlreadyLocked = errors.New("receiver data directory is already locked")
 
-const lockPortAttempts = 128
-
 type metadata struct {
 	PID       int       `json:"pid"`
 	Hostname  string    `json:"hostname"`
@@ -131,14 +129,21 @@ func existingLockIsActive(path string) (bool, error) {
 
 func listenForLock(path string) (net.Listener, int, error) {
 	preferred := lockPort(path)
-	for attempt := 0; attempt < lockPortAttempts; attempt++ {
-		port := 49152 + (preferred-49152+attempt)%16384
-		listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
-		if err == nil {
-			return listener, port, nil
-		}
+	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", preferred))
+	if err == nil {
+		return listener, preferred, nil
 	}
-	return nil, 0, fmt.Errorf("no local instance-lock port is available for %s", path)
+
+	listener, err = net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return nil, 0, fmt.Errorf("allocate local instance-lock port for %s: %w", path, err)
+	}
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || address.Port <= 0 {
+		_ = listener.Close()
+		return nil, 0, fmt.Errorf("resolve allocated instance-lock port for %s", path)
+	}
+	return listener, address.Port, nil
 }
 
 func randomToken() (string, error) {
@@ -157,7 +162,7 @@ func serveLock(listener net.Listener, token string) {
 		}
 		go func() {
 			defer connection.Close()
-			_ = connection.SetDeadline(time.Now().Add(time.Second))
+			_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
 			line, err := bufio.NewReader(connection).ReadString('\n')
 			if err != nil || strings.TrimSpace(line) != "PING "+token {
 				return
@@ -168,12 +173,12 @@ func serveLock(listener net.Listener, token string) {
 }
 
 func pingLock(port int, token string) bool {
-	connection, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond)
+	connection, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
 	if err != nil {
 		return false
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(time.Second))
+	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := fmt.Fprintf(connection, "PING %s\n", token); err != nil {
 		return false
 	}
