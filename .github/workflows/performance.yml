@@ -52,10 +52,11 @@ jobs:
         run: >-
           go test
           -run '^$'
-          -bench 'Benchmark(NormalizeOrders|NormalizeHistory68Buckets|AppendOrders|AppendHistory68Buckets|ReadPrices|ReadHistory68Buckets|SerializePrices|OutboxEnqueuePrices|OutboxRestart)(1000|10000)?$'
+          -bench 'Benchmark(CaptureOrders|NormalizeOrders|NormalizeHistory68Buckets|AppendOrders|AppendHistory68Buckets|ReadPrices|ReadHistory68Buckets|SerializePrices|OutboxEnqueuePrices|OutboxRestart)(1000|10000)?$'
           -benchtime 1x
           -benchmem
           -count 1
+          ./apps/collector/internal/httpingest
           ./apps/collector/internal/normalization
           ./apps/collector/internal/storage/normalizedjsonl
           ./apps/collector/internal/storage/localdb
