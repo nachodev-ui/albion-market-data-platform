@@ -7,7 +7,7 @@ import (
 
 func main() {
 	loadDotEnv()
-	storageLock, err := prepareLocalStorage()
+	storageLock, err := prepareLocalStorage(storagePathsFromArgs(os.Args[1:]))
 	if err != nil {
 		log.Printf("receiver storage initialization failed: %v", err)
 		os.Exit(1)
