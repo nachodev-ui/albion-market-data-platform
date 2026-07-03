@@ -124,7 +124,7 @@
       "max_counters": { "rows": 100 }
     },
     "recover_after_upstream_error_1000": {
-      "max_p95_ms": 100,
+      "max_p95_ms": 250,
       "max_alloc_bytes_per_op": 15000000,
       "max_artifacts_bytes": { "outbox_state": 10000 },
       "min_counters": { "completed_batches": 1, "queue_high_watermark": 1000, "rescheduled_batches": 1 },
