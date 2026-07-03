@@ -36,4 +36,9 @@ $outboxCtlBuildPath = Join-Path ([System.IO.Path]::GetTempPath()) "albion-market
 go build -o $outboxCtlBuildPath ./apps/collector/cmd/outboxctl
 Remove-Item $outboxCtlBuildPath -Force -ErrorAction SilentlyContinue
 
+Write-Host "`n== Paquete de fuente seguro =="
+$sourcePackagePath = Join-Path ([System.IO.Path]::GetTempPath()) "albion-market-data-platform-source-check.zip"
+& (Join-Path $PSScriptRoot "export-source.ps1") -OutputPath $sourcePackagePath
+Remove-Item $sourcePackagePath -Force -ErrorAction SilentlyContinue
+
 Write-Host "`nTodo correcto."
