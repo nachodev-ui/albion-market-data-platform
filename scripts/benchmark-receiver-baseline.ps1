@@ -15,6 +15,7 @@ try {
     $outputRoot = Join-Path $OutputDirectory $stamp
     $profiles = Join-Path $outputRoot "profiles"
     $report = Join-Path $outputRoot "baseline.json"
+    $budgetPath = "./performance/receiver-budgets.json"
     New-Item -ItemType Directory -Force -Path $profiles | Out-Null
 
     $arguments = @(
@@ -23,8 +24,11 @@ try {
         "-output", $report,
         "-profiles-dir", $profiles
     )
-    if ($ValidateBudgets) {
-        $arguments += @("-budgets", "./performance/receiver-budgets.json")
+    if (Test-Path $budgetPath) {
+        $arguments += @("-budgets", $budgetPath)
+    }
+    elseif ($ValidateBudgets) {
+        throw "performance budget file not found: $budgetPath"
     }
 
     & go @arguments
@@ -39,6 +43,9 @@ try {
 
     Write-Host "Baseline=$report"
     Write-Host "Profiles=$profiles"
+    if (Test-Path $budgetPath) {
+        Write-Host "Budgets=$budgetPath status=validated"
+    }
 }
 finally {
     Pop-Location
