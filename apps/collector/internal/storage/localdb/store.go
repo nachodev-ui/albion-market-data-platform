@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"albion-market-data/collector/internal/domain"
+	"albion-market-data/collector/internal/storage/durable"
 	"albion-market-data/collector/internal/storage/queryjsonl"
 )
 
@@ -365,17 +366,12 @@ func (s *Store) persistLocked() error {
 		Histories:     histories,
 		Orders:        orders,
 	}
-	encoded, err := json.MarshalIndent(payload, "", "  ")
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode local database: %w", err)
 	}
-	temporary := s.path + ".tmp"
-	if err := os.WriteFile(temporary, encoded, 0o644); err != nil {
+	if err := durable.AtomicWrite(s.path, encoded, 0o644); err != nil {
 		return fmt.Errorf("write local database: %w", err)
-	}
-	if err := os.Rename(temporary, s.path); err != nil {
-		_ = os.Remove(temporary)
-		return fmt.Errorf("replace local database: %w", err)
 	}
 	s.updatedAt = updatedAt
 	return nil
