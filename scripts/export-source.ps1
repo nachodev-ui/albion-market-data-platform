@@ -26,6 +26,9 @@ function Test-ForbiddenPath {
     param([string]$Path)
 
     $normalized = Normalize-Path $Path
+    if ($normalized -eq '.env.example' -or $normalized.EndsWith('/.env.example', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
     $patterns = @(
         '(^|/)\.git(/|$)',
         '(^|/)\.env($|\.)',
