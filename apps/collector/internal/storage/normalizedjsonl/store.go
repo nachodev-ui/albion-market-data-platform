@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"albion-market-data/collector/internal/domain"
+	"albion-market-data/collector/internal/storage/durable"
 )
 
 type Store struct {
@@ -25,6 +26,9 @@ func NewStore(directory string) (*Store, error) {
 	}
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, fmt.Errorf("create normalized data directory: %w", err)
+	}
+	if _, err := durable.RepairJSONLPatterns(directory, 20<<20, "market-history-*.jsonl", "market-orders-*.jsonl"); err != nil {
+		return nil, fmt.Errorf("repair normalized JSONL: %w", err)
 	}
 	store := &Store{
 		directory:   directory,
@@ -132,7 +136,7 @@ func (s *Store) scanKeys(pattern string, visit func([]byte) error) error {
 			return fmt.Errorf("open %s: %w", path, err)
 		}
 		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64*1024), 10<<20)
+		scanner.Buffer(make([]byte, 64*1024), 20<<20)
 		line := 0
 		for scanner.Scan() {
 			line++
@@ -153,17 +157,8 @@ func (s *Store) scanKeys(pattern string, visit func([]byte) error) error {
 }
 
 func appendJSON(path string, value any) error {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("encode normalized record: %w", err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer file.Close()
-	if _, err := file.Write(append(encoded, '\n')); err != nil {
-		return fmt.Errorf("append %s: %w", path, err)
+	if err := durable.AppendJSONLine(path, value); err != nil {
+		return fmt.Errorf("append normalized record: %w", err)
 	}
 	return nil
 }
