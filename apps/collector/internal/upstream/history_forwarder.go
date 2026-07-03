@@ -361,7 +361,7 @@ func (f *HistoryForwarder) processBatch(ctx context.Context, batch *ClaimedBatch
 		return
 	}
 
-	delay := retryBackoff(f.retryDelay, f.maxRetryDelay, totalAttempts)
+	delay := retryBackoffWithJitter(f.retryDelay, f.maxRetryDelay, totalAttempts, payload.RequestID)
 	nextAttempt := time.Now().UTC().Add(delay)
 	if err := f.outbox.Reschedule(batch.RequestID, attemptsUsed, statusCode, lastErr.Error(), nextAttempt); err != nil {
 		f.logger.Event(observability.LevelError, "upstream.outbox_reschedule_failed", observability.F("request_id", batch.RequestID), observability.F("error", err))
@@ -412,7 +412,7 @@ func (f *HistoryForwarder) sendCycle(ctx context.Context, payload IngestHistoryR
 		if attempt == f.retryCount {
 			break
 		}
-		delay := time.Duration(attempt) * f.retryDelay
+		delay := retryAttemptDelay(f.retryDelay, f.maxRetryDelay, attempt, payload.RequestID)
 		f.metrics.RecordRetry()
 		f.logger.Event(
 			observability.LevelRetry,

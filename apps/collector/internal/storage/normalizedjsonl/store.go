@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"albion-market-data/collector/internal/domain"
@@ -18,6 +19,11 @@ type Store struct {
 	mu          sync.Mutex
 	historyKeys map[string]struct{}
 	orderKeys   map[string]struct{}
+}
+
+type orderFileBatch struct {
+	orders []domain.NormalizedMarketOrder
+	keys   []string
 }
 
 func NewStore(directory string) (*Store, error) {
@@ -70,25 +76,57 @@ func (s *Store) AppendOrders(ctx context.Context, orders []domain.NormalizedMark
 		return 0, 0, ctx.Err()
 	default:
 	}
+	if len(orders) == 0 {
+		return 0, 0, nil
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	written := 0
+
+	batches := make(map[string]*orderFileBatch)
+	filenames := make([]string, 0, 1)
+	pendingKeys := make(map[string]struct{}, len(orders))
 	duplicates := 0
 	for _, order := range orders {
 		if err := order.Validate(); err != nil {
-			return written, duplicates, fmt.Errorf("validate order %d: %w", order.OrderID, err)
+			return 0, duplicates, fmt.Errorf("validate order %d: %w", order.OrderID, err)
 		}
 		if _, exists := s.orderKeys[order.DedupeKey]; exists {
 			duplicates++
 			continue
 		}
-		filename := "market-orders-" + order.CapturedAt.UTC().Format("2006-01-02") + ".jsonl"
-		if err := appendJSON(filepath.Join(s.directory, filename), order); err != nil {
-			return written, duplicates, err
+		if _, exists := pendingKeys[order.DedupeKey]; exists {
+			duplicates++
+			continue
 		}
-		s.orderKeys[order.DedupeKey] = struct{}{}
-		written++
+		pendingKeys[order.DedupeKey] = struct{}{}
+		filename := "market-orders-" + order.CapturedAt.UTC().Format("2006-01-02") + ".jsonl"
+		batch := batches[filename]
+		if batch == nil {
+			batch = &orderFileBatch{}
+			batches[filename] = batch
+			filenames = append(filenames, filename)
+		}
+		batch.orders = append(batch.orders, order)
+		batch.keys = append(batch.keys, order.DedupeKey)
+	}
+
+	sort.Strings(filenames)
+	written := 0
+	for _, filename := range filenames {
+		select {
+		case <-ctx.Done():
+			return written, duplicates, ctx.Err()
+		default:
+		}
+		batch := batches[filename]
+		if err := durable.AppendJSONLines(filepath.Join(s.directory, filename), batch.orders); err != nil {
+			return written, duplicates, fmt.Errorf("append normalized order batch: %w", err)
+		}
+		for _, key := range batch.keys {
+			s.orderKeys[key] = struct{}{}
+		}
+		written += len(batch.orders)
 	}
 	return written, duplicates, nil
 }

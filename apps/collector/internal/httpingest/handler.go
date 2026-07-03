@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"runtime"
 	"strings"
 	"time"
 
@@ -38,6 +39,10 @@ type eventLogger interface {
 	Printf(format string, args ...any)
 }
 
+type Options struct {
+	MaxConcurrent int
+}
+
 type Handler struct {
 	server           string
 	rawStore         RawStore
@@ -46,9 +51,14 @@ type Handler struct {
 	historyForwarder HistoryForwarder
 	logger           eventLogger
 	now              func() time.Time
+	ingestSlots      chan struct{}
 }
 
 func NewHandler(server string, rawStore RawStore, normalizer *normalization.Service, priceForwarder PriceForwarder, historyForwarder HistoryForwarder, logger eventLogger) (*Handler, error) {
+	return NewHandlerWithOptions(server, rawStore, normalizer, priceForwarder, historyForwarder, logger, Options{})
+}
+
+func NewHandlerWithOptions(server string, rawStore RawStore, normalizer *normalization.Service, priceForwarder PriceForwarder, historyForwarder HistoryForwarder, logger eventLogger, options Options) (*Handler, error) {
 	if server != "west" && server != "east" && server != "europe" {
 		return nil, fmt.Errorf("unsupported server %q", server)
 	}
@@ -67,6 +77,13 @@ func NewHandler(server string, rawStore RawStore, normalizer *normalization.Serv
 	if logger == nil {
 		logger = observability.NewLogger(nil, "auto")
 	}
+	maxConcurrent := options.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = runtime.GOMAXPROCS(0)
+		if maxConcurrent < 4 {
+			maxConcurrent = 4
+		}
+	}
 	return &Handler{
 		server:           server,
 		rawStore:         rawStore,
@@ -75,6 +92,7 @@ func NewHandler(server string, rawStore RawStore, normalizer *normalization.Serv
 		historyForwarder: historyForwarder,
 		logger:           logger,
 		now:              time.Now,
+		ingestSlots:      make(chan struct{}, maxConcurrent),
 	}, nil
 }
 
@@ -104,6 +122,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	select {
+	case h.ingestSlots <- struct{}{}:
+		defer func() { <-h.ingestSlots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		h.logEvent(observability.LevelRetry, "ingest.backpressure_rejected", observability.F("path", r.URL.Path), observability.F("max_concurrent", cap(h.ingestSlots)))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"status":     "busy",
+			"retryAfter": 1,
+			"error":      "receiver ingest capacity is temporarily exhausted",
+		})
 		return
 	}
 
