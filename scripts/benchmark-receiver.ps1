@@ -66,12 +66,13 @@ try {
     $jsonPath = Join-Path $OutputDirectory "receiver-baseline-$timestamp.json"
     $csvPath = Join-Path $OutputDirectory "receiver-baseline-$timestamp.csv"
     $packages = @(
+        ".\apps\collector\internal\httpingest",
         ".\apps\collector\internal\normalization",
         ".\apps\collector\internal\storage\normalizedjsonl",
         ".\apps\collector\internal\storage\localdb",
         ".\apps\collector\internal\upstream"
     )
-    $benchmarkPattern = 'Benchmark(NormalizeOrders|NormalizeHistory68Buckets|AppendOrders|AppendHistory68Buckets|ReadPrices|ReadHistory68Buckets|SerializePrices|OutboxEnqueuePrices|OutboxRestart)(1000|10000)?$'
+    $benchmarkPattern = 'Benchmark(CaptureOrders|NormalizeOrders|NormalizeHistory68Buckets|AppendOrders|AppendHistory68Buckets|ReadPrices|ReadHistory68Buckets|SerializePrices|OutboxEnqueuePrices|OutboxRestart)(1000|10000)?$'
 
     $benchmarkOutput = & go test -run '^$' -bench $benchmarkPattern -benchmem -count $Count @packages 2>&1
     $benchmarkOutput | Tee-Object -FilePath $rawPath
