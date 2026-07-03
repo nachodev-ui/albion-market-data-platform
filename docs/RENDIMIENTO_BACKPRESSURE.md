@@ -17,64 +17,77 @@ HTTP ingest
 
 ## Backpressure HTTP
 
-El ingreso `POST` usa un límite de concurrencia igual a `max(GOMAXPROCS, 4)`.
-
-Cuando todos los slots están ocupados, el receiver responde antes de leer o persistir el cuerpo:
-
-```http
-HTTP/1.1 429 Too Many Requests
-Retry-After: 1
-```
-
-El cliente debe reintentar esa captura. Los endpoints de salud, readiness y consulta local no consumen slots de ingestión.
+El ingreso `POST` usa un límite de concurrencia igual a `max(GOMAXPROCS, 4)`. Cuando todos los slots están ocupados, responde `429 Too Many Requests` con `Retry-After: 1` antes de leer el cuerpo. Los endpoints de salud, readiness y consulta local no consumen slots de ingestión.
 
 ## Escritura por lotes
 
-Las órdenes normalizadas se agrupan por archivo diario. Cada lote usa una sola apertura, escritura y sincronización por archivo, en lugar de un `fsync` por orden.
-
-La base embebida sigue instalando snapshots de forma atómica, pero usa JSON compacto para reducir bytes escritos y asignaciones. Los JSONL normalizados continúan siendo la auditoría durable y la fuente de reconstrucción.
+Las órdenes normalizadas se agrupan por archivo diario. Cada lote usa una sola apertura, escritura y sincronización por archivo, en lugar de un `fsync` por orden. La base embebida mantiene snapshots atómicos con JSON compacto.
 
 ## Outbox y caída upstream
 
-La capacidad configurada incluye entradas pendientes y batches en estado `processing` o `retrying`.
+La capacidad configurada incluye entradas pendientes y batches `processing` o `retrying`.
 
 - con utilización igual o superior al 90 %, el estado pasa a `degraded`;
 - al 100 %, la outbox no crece sin límite y las nuevas entradas se rechazan;
 - los rechazos se contabilizan en `queue_dropped_entries`;
 - raw, normalización y almacenamiento local ocurren antes del enqueue upstream;
-- los datos locales pueden reenviarse mediante las herramientas de reproceso y backfill;
-- un batch solo pasa a dead-letter al agotar `UPSTREAM_MAX_DELIVERY_ATTEMPTS` o recibir un error permanente.
+- un batch solo pasa a dead-letter al agotar intentos o recibir un error permanente;
+- los reintentos usan backoff con jitter estable de ±20 %.
 
-Los reintentos aplican jitter estable de ±20 % según `request_id` e intento. Esto evita que varias instancias reintenten en sincronía después de una caída compartida.
+## Línea base completa
 
-## Benchmarks reproducibles
-
-Desde la raíz del repositorio:
+Ejecuta desde la raíz:
 
 ```powershell
-.\scripts\benchmark-receiver.ps1 -Count 3
+.\scripts\benchmark-receiver.ps1
 ```
 
-La batería cubre 1.000 y 10.000 órdenes en:
+El valor predeterminado es `-Count 20`, suficiente para calcular p50 y p95 por escenario. La matriz cubre:
 
-- normalización;
-- escritura JSONL normalizada;
-- actualización del snapshot local;
-- enqueue de la outbox persistente.
+- normalización de 1.000 y 10.000 órdenes;
+- historial de 68 buckets;
+- escritura JSONL y actualización de base local;
+- lectura de precios y lectura histórica;
+- serialización de payloads;
+- enqueue y reinicio de outbox con 1.000 y 10.000 entradas;
+- memoria y allocations por operación;
+- tamaño de archivos reales bajo `data/`;
+- high-watermark de cola;
+- recuperación después de error upstream.
 
-Los resultados se guardan en:
+Se generan tres archivos:
 
 ```text
-artifacts/receiver-benchmarks/
+artifacts/receiver-benchmarks/receiver-benchmarks-*.txt
+artifacts/receiver-benchmarks/receiver-baseline-*.json
+artifacts/receiver-benchmarks/receiver-baseline-*.csv
 ```
 
-Ese directorio está ignorado por Git. Compara resultados en la misma máquina, con la misma versión de Go y sin carga externa relevante.
+El TXT conserva la salida cruda. JSON y CSV contienen p50, p95, máximo, bytes/op y allocations/op.
 
-CI ejecuta una iteración corta para detectar regresiones funcionales o benchmarks rotos; las comparaciones de rendimiento deben usar varias repeticiones locales.
+## Latencia hasta PostgreSQL
+
+La medición se hace contra la API central porque una respuesta exitosa confirma el flujo HTTP y el commit del backend. Esta prueba escribe filas sintéticas y requiere confirmación explícita:
+
+```powershell
+.\scripts\benchmark-receiver.ps1 `
+  -UpstreamUrl http://127.0.0.1:8788 `
+  -UpstreamToken $env:UPSTREAM_TOKEN `
+  -UpstreamSamples 20 `
+  -ConfirmUpstreamWrite
+```
+
+Sin `-UpstreamUrl`, el informe deja `upstream_postgresql` en `null` y muestra una advertencia; no inventa una cifra.
+
+## Presupuestos numéricos
+
+Los presupuestos se fijan solo después de obtener la primera línea base completa en la máquina objetivo. Deben documentarse usando p95, memoria, allocations, tamaño de archivos, high-watermark, recuperación y latencia hacia PostgreSQL.
 
 ## Validación
 
 ```powershell
 .\scripts\check.ps1
-.\scripts\benchmark-receiver.ps1 -Count 3
+.\scripts\benchmark-receiver.ps1
 ```
+
+CI ejecuta una iteración corta de todos los escenarios y verifica también recuperación upstream. Las comparaciones de rendimiento usan la ejecución local de 20 muestras.
