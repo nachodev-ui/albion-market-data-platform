@@ -8,10 +8,7 @@ import (
 )
 
 func BenchmarkNormalizeHistory68Buckets(b *testing.B) {
-	service, err := NewService(testCatalog(b), &memoryStore{})
-	if err != nil {
-		b.Fatal(err)
-	}
+	service := benchmarkService(b)
 	capture := benchmarkHistoryCapture(68)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -42,9 +39,9 @@ func benchmarkHistoryCapture(bucketCount int) domain.CapturedHistory {
 		Server:        "west",
 		CapturedAt:    capturedAt,
 		Payload: domain.MarketHistoriesUpload{
-			AlbionID:     6826,
-			LocationID:   "1002",
-			QualityLevel: 2,
+			AlbionID:     1,
+			LocationID:   "3005",
+			QualityLevel: 1,
 			Timescale:    domain.TimescaleDays,
 			Histories:    points,
 		},
