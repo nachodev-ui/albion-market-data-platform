@@ -1,0 +1,211 @@
+# Performance validation for fictional Albion Online game data.
+name: Receiver performance baseline
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - apps/collector/cmd/perfbaseline/**
+      - apps/collector/internal/**
+      - scripts/benchmark-receiver-baseline.ps1
+      - docs/RENDIMIENTO_BASELINE_COMPLETO.md
+      - .github/workflows/performance-baseline.yml
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - apps/collector/cmd/perfbaseline/**
+      - apps/collector/internal/**
+      - scripts/benchmark-receiver-baseline.ps1
+      - docs/RENDIMIENTO_BASELINE_COMPLETO.md
+      - .github/workflows/performance-baseline.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: receiver-performance-baseline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-baseline:
+    name: Local receiver baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/collector/go.mod
+          cache-dependency-path: apps/collector/go.sum
+
+      - name: Test baseline harness
+        run: go test ./apps/collector/cmd/perfbaseline
+
+      - name: Run comprehensive baseline
+        shell: pwsh
+        run: ./scripts/benchmark-receiver-baseline.ps1 -Samples 5
+
+      - name: Validate observed receiver limits
+        shell: pwsh
+        run: |
+          $baseline = Get-ChildItem ./artifacts/receiver-performance-baseline/*/baseline.json |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          $report = Get-Content $baseline.FullName -Raw | ConvertFrom-Json
+          if ($report.scenarios.Count -lt 20) {
+            throw "expected at least 20 performance scenarios"
+          }
+          foreach ($scenario in $report.scenarios) {
+            if ([double]$scenario.p95_ms -gt 300.0) {
+              throw "$($scenario.name) exceeded the observed 300 ms p95 ceiling"
+            }
+            if ([double]$scenario.alloc_bytes_per_op -gt 130000000.0) {
+              throw "$($scenario.name) exceeded the 130 MB allocation ceiling"
+            }
+            if ($null -ne $scenario.artifacts_bytes) {
+              foreach ($artifact in $scenario.artifacts_bytes.PSObject.Properties) {
+                if ([long]$artifact.Value -gt 6000000L) {
+                  throw "$($scenario.name) artifact $($artifact.Name) exceeded 6 MB"
+                }
+              }
+            }
+          }
+
+      - name: Upload local baseline and profiles
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: receiver-performance-local-${{ github.sha }}
+          path: artifacts/receiver-performance-baseline/
+          if-no-files-found: error
+          retention-days: 30
+
+  postgres-round-trip:
+    name: PostgreSQL round trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: albion_market
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d albion_market"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout data platform
+        uses: actions/checkout@v7
+        with:
+          path: platform
+
+      - name: Checkout central API
+        uses: actions/checkout@v7
+        with:
+          repository: nachodev-ui/albion-market-api
+          ref: main
+          path: market-api
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: market-api/go.mod
+          cache-dependency-path: market-api/go.sum
+
+      - name: Apply PostgreSQL migrations
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for migration in market-api/migrations/*.sql; do
+            psql "postgres://postgres:postgres@127.0.0.1:5432/albion_market?sslmode=disable" \
+              -v ON_ERROR_STOP=1 \
+              -f "$migration"
+          done
+
+      - name: Start central API
+        working-directory: market-api
+        env:
+          APP_ENV: test
+          LOAD_DOTENV: "false"
+          HTTP_ADDR: 127.0.0.1:18080
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/albion_market?sslmode=disable
+          INGEST_BEARER_TOKEN: performance-integration-token-20260703
+          INGEST_BEARER_TOKEN_FILE: ""
+          INGEST_MIN_TOKEN_LENGTH: "32"
+          INGEST_REQUIRE_HTTPS: "false"
+          RATE_LIMIT_ENABLED: "false"
+          LOG_COLOR: never
+        run: |
+          go run ./cmd/api > ../platform/artifacts-postgres-api.log 2>&1 &
+          echo $! > ../platform/api.pid
+
+      - name: Wait for PostgreSQL-backed readiness
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/readyz > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat platform/artifacts-postgres-api.log
+          exit 1
+
+      - name: Measure API to PostgreSQL round trip
+        shell: pwsh
+        run: |
+          ./market-api/scripts/benchmark-ingest-postgres.ps1 `
+            -BaseUrl http://127.0.0.1:18080 `
+            -BatchSize 500 `
+            -Rounds 20 `
+            -Token performance-integration-token-20260703 `
+            -OutputDirectory ./platform/artifacts/postgres-round-trip
+
+      - name: Validate observed PostgreSQL limits
+        shell: pwsh
+        run: |
+          $summary = Get-ChildItem ./platform/artifacts/postgres-round-trip/*-summary.csv |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          $rows = Import-Csv $summary.FullName
+          $limits = @{
+            "insert-new" = 100.0
+            "update-newer" = 100.0
+            "no-change" = 75.0
+            "duplicate" = 30.0
+          }
+          foreach ($phase in $limits.Keys) {
+            $row = $rows | Where-Object phase -eq $phase | Select-Object -First 1
+            if ($null -eq $row -or $row.all_valid -ne "True") {
+              throw "invalid PostgreSQL performance phase: $phase"
+            }
+            $p95 = [double]::Parse($row.p95_ms, [Globalization.CultureInfo]::InvariantCulture)
+            if ($p95 -gt $limits[$phase]) {
+              throw "$phase p95=$p95 ms exceeded $($limits[$phase]) ms"
+            }
+          }
+
+      - name: Upload PostgreSQL measurements
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: receiver-postgres-round-trip-${{ github.sha }}
+          path: |
+            platform/artifacts/postgres-round-trip/
+            platform/artifacts-postgres-api.log
+          if-no-files-found: warn
+          retention-days: 30
