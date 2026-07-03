@@ -2,7 +2,7 @@
 param(
     [ValidateRange(3, 100)]
     [int]$Samples = 25,
-    [string]$OutputDirectory = ".\artifacts\receiver-performance-baseline",
+    [string]$OutputDirectory = "artifacts/receiver-performance-baseline",
     [switch]$ValidateBudgets
 )
 
@@ -18,13 +18,13 @@ try {
     New-Item -ItemType Directory -Force -Path $profiles | Out-Null
 
     $arguments = @(
-        "run", ".\apps\collector\cmd\perfbaseline",
+        "run", "./apps/collector/cmd/perfbaseline",
         "-samples", $Samples,
         "-output", $report,
         "-profiles-dir", $profiles
     )
     if ($ValidateBudgets) {
-        $arguments += @("-budgets", ".\performance\receiver-budgets.json")
+        $arguments += @("-budgets", "./performance/receiver-budgets.json")
     }
 
     & go @arguments
