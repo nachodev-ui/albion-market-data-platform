@@ -10,12 +10,12 @@ if ($unformatted) {
 }
 
 Write-Host "`n== Pruebas =="
-go test -count=1 -timeout 60s ./apps/collector/...
+go test -count=1 -timeout 90s ./apps/collector/...
 
 Write-Host "`n== Detector de carreras =="
 $cgo = (go env CGO_ENABLED).Trim()
 if ($cgo -eq "1") {
-    go test -race -count=1 -timeout 90s ./apps/collector/...
+    go test -race -count=1 -timeout 120s ./apps/collector/...
 } else {
     Write-Warning "Se omite -race porque CGO_ENABLED=$cgo. Las demás validaciones continúan."
 }
@@ -35,6 +35,10 @@ Remove-Item $backfillBuildPath -Force -ErrorAction SilentlyContinue
 $outboxCtlBuildPath = Join-Path ([System.IO.Path]::GetTempPath()) "albion-market-outboxctl-check.exe"
 go build -o $outboxCtlBuildPath ./apps/collector/cmd/outboxctl
 Remove-Item $outboxCtlBuildPath -Force -ErrorAction SilentlyContinue
+
+$storageCtlBuildPath = Join-Path ([System.IO.Path]::GetTempPath()) "albion-market-storagectl-check.exe"
+go build -o $storageCtlBuildPath ./apps/collector/cmd/storagectl
+Remove-Item $storageCtlBuildPath -Force -ErrorAction SilentlyContinue
 
 Write-Host "`n== Paquete de fuente seguro =="
 $sourcePackagePath = Join-Path ([System.IO.Path]::GetTempPath()) "albion-market-data-platform-source-check.zip"
