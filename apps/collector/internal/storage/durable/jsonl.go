@@ -126,14 +126,30 @@ func RepairJSONLPatterns(directory string, maxLineBytes int, patterns ...string)
 }
 
 func AppendJSONLine(path string, value any) error {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("encode JSONL record: %w", err)
+	return AppendJSONLines(path, []any{value})
+}
+
+func AppendJSONLines[T any](path string, values []T) error {
+	if len(values) == 0 {
+		return nil
 	}
-	line := append(encoded, '\n')
+	var buffer bytes.Buffer
+	for index := range values {
+		encoded, err := json.Marshal(values[index])
+		if err != nil {
+			return fmt.Errorf("encode JSONL record %d: %w", index, err)
+		}
+		buffer.Grow(len(encoded) + 1)
+		_, _ = buffer.Write(encoded)
+		_ = buffer.WriteByte('\n')
+	}
+	return appendJSONLBytes(path, buffer.Bytes())
+}
+
+func appendJSONLBytes(path string, content []byte) error {
 	budgetMu.Lock()
 	defer budgetMu.Unlock()
-	if err := checkAppendLocked(path, int64(len(line))); err != nil {
+	if err := checkAppendLocked(path, int64(len(content))); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -143,7 +159,7 @@ func AppendJSONLine(path string, value any) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	if _, err := file.Write(line); err != nil {
+	if _, err := file.Write(content); err != nil {
 		file.Close()
 		return fmt.Errorf("append %s: %w", path, err)
 	}
