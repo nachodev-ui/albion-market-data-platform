@@ -36,7 +36,7 @@ jobs:
   benchmark-smoke:
     name: Benchmark smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -52,11 +52,15 @@ jobs:
         run: >-
           go test
           -run '^$'
-          -bench 'Benchmark(NormalizeOrders|AppendOrders|OutboxEnqueuePrices)(1000|10000)$'
+          -bench 'Benchmark(CaptureOrders|NormalizeOrders|NormalizeHistory68Buckets|AppendOrders|AppendHistory68Buckets|ReadPrices|ReadHistory68Buckets|SerializePrices|OutboxEnqueuePrices|OutboxRestart)(1000|10000)?$'
           -benchtime 1x
           -benchmem
           -count 1
+          ./apps/collector/internal/httpingest
           ./apps/collector/internal/normalization
           ./apps/collector/internal/storage/normalizedjsonl
           ./apps/collector/internal/storage/localdb
           ./apps/collector/internal/upstream
+
+      - name: Verify outage recovery metrics
+        run: go test -run 'TestPerformanceBaselineOutboxRecovery$' -v ./apps/collector/internal/upstream
