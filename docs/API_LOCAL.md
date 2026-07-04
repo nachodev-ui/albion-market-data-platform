@@ -18,6 +18,7 @@ http://127.0.0.1:8787
 | Método | Ruta | Propósito |
 |---|---|---|
 | `GET` | `/healthz` | Liveness del proceso HTTP |
+| `GET` | `/metrics` | Métricas operativas en formato Prometheus |
 | `GET` | `/readyz` | Readiness del catálogo y repositorio local |
 | `GET` | `/api/v1/status` | Estado del receiver, repositorio y forwarders |
 | `GET` | `/api/v1/markets` | Mercados configurados |
@@ -25,9 +26,39 @@ http://127.0.0.1:8787
 | `GET` | `/api/v1/history` | Capturas históricas normalizadas |
 | `GET` | `/api/v1/orders` | Órdenes normalizadas capturadas |
 
-Solo se aceptan `GET` y `OPTIONS` en estas rutas. Las rutas desconocidas
-responden `404` y los métodos no admitidos responden `405` con el header
-`Allow: GET, OPTIONS`.
+Las rutas JSON documentadas por OpenAPI aceptan `GET` y `OPTIONS`. Las rutas
+desconocidas responden `404` y los métodos no admitidos responden `405` con el
+header `Allow: GET, OPTIONS`. `/metrics` es un endpoint operacional separado:
+acepta únicamente `GET`, devuelve `text/plain; version=0.0.4` y no forma parte
+del contrato JSON consumido por la calculadora.
+
+## Métricas Prometheus
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8787/metrics |
+    Select-Object -ExpandProperty Content
+```
+
+El exporter reutiliza los snapshots internos de precios e historial y no lee ni
+parsea manualmente `data/outbox/state.json`. Expone, entre otras:
+
+- `albion_receiver_captures_received_total`;
+- `albion_receiver_entries_received_total`;
+- `albion_receiver_entries_stored_total`;
+- `albion_receiver_duplicates_total`;
+- `albion_receiver_normalization_errors_total`;
+- `albion_receiver_storage_errors_total`;
+- `albion_receiver_outbox_depth` y `albion_receiver_outbox_capacity`;
+- `albion_receiver_outbox_oldest_pending_age_seconds`;
+- `albion_receiver_dead_letter_batches_total`;
+- `albion_receiver_upstream_latency_seconds`;
+- `albion_receiver_upstream_last_success_timestamp_seconds`;
+- `albion_receiver_storage_bytes`;
+- `albion_receiver_uptime_seconds`;
+- `albion_receiver_build_info`.
+
+Los tamaños de almacenamiento se cachean brevemente para que un scraper no
+recorra los directorios en cada solicitud consecutiva.
 
 ## Liveness y readiness
 

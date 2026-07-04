@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"albion-market-data/collector/internal/domain"
+	"albion-market-data/collector/internal/observability"
 	"albion-market-data/collector/internal/storage/durable"
 	"albion-market-data/collector/internal/storage/queryjsonl"
 )
@@ -37,9 +38,14 @@ type Store struct {
 	histories map[string]domain.NormalizedHistory
 	orders    map[string]domain.NormalizedMarketOrder
 	updatedAt time.Time
+	metrics   *observability.Registry
 }
 
 func New(path string) (*Store, error) {
+	return NewWithMetrics(path, nil)
+}
+
+func NewWithMetrics(path string, metrics *observability.Registry) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("local database path is required")
 	}
@@ -50,6 +56,7 @@ func New(path string) (*Store, error) {
 		path:      path,
 		histories: make(map[string]domain.NormalizedHistory),
 		orders:    make(map[string]domain.NormalizedMarketOrder),
+		metrics:   metrics,
 	}
 	if err := store.load(); err != nil {
 		return nil, err
@@ -371,8 +378,11 @@ func (s *Store) persistLocked() error {
 		return fmt.Errorf("encode local database: %w", err)
 	}
 	if err := durable.AtomicWrite(s.path, encoded, 0o644); err != nil {
-		return fmt.Errorf("write local database: %w", err)
+		wrapped := fmt.Errorf("write local database: %w", err)
+		s.metrics.RecordStorageError("database", wrapped)
+		return wrapped
 	}
+	s.metrics.RecordStorageSuccess("database")
 	s.updatedAt = updatedAt
 	return nil
 }

@@ -188,6 +188,53 @@ El estado superior del servicio cambia a `degraded` cuando cualquiera de los
 forwarders habilitados queda degradado o detenido. El endpoint sigue respondiendo HTTP
 200 para que pueda inspeccionarse desde herramientas locales.
 
+## Endpoint de métricas
+
+```http
+GET /metrics
+```
+
+La respuesta usa el formato de exposición de Prometheus y combina tres fuentes
+internas, sin inspeccionar manualmente archivos JSON/JSONL:
+
+1. El registro concurrente del receiver para capturas, entradas, almacenados,
+   duplicados y errores.
+2. Los snapshots existentes de los forwarders y de la outbox persistente.
+3. La medición cacheada de bytes en `raw`, `normalized`, base local y outbox.
+
+Consulta rápida:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8787/metrics |
+    Select-Object -ExpandProperty Content
+```
+
+Métricas principales:
+
+| Métrica | Tipo | Interpretación |
+|---|---|---|
+| `albion_receiver_captures_received_total` | counter | Peticiones de captura recibidas por topic |
+| `albion_receiver_entries_received_total` | counter | Entradas decodificadas por pipeline |
+| `albion_receiver_entries_stored_total` | counter | Entradas nuevas persistidas |
+| `albion_receiver_duplicates_total` | counter | Entradas deduplicadas |
+| `albion_receiver_normalization_errors_total` | counter | Fallos de decode o normalización |
+| `albion_receiver_storage_errors_total` | counter | Errores de escritura por área |
+| `albion_receiver_forwarder_batches_sent_total` | counter | Batches aceptados por la API central |
+| `albion_receiver_forwarder_retries_total` | counter | Reintentos upstream |
+| `albion_receiver_outbox_depth` | gauge | Entradas pendientes por pipeline |
+| `albion_receiver_outbox_capacity` | gauge | Capacidad configurada por pipeline |
+| `albion_receiver_outbox_oldest_pending_age_seconds` | gauge | Edad del pendiente más antiguo |
+| `albion_receiver_dead_letter_batches_total` | counter | Batches enviados a dead-letter |
+| `albion_receiver_upstream_latency_seconds` | gauge | Última, media, máxima y último intento |
+| `albion_receiver_upstream_last_success_timestamp_seconds` | gauge | Último envío exitoso |
+| `albion_receiver_storage_bytes` | gauge | Bytes por área y total observable |
+| `albion_receiver_uptime_seconds` | gauge | Tiempo activo del proceso |
+| `albion_receiver_build_info` | gauge | Versión, commit, build time y Go |
+
+Los timestamps sin observaciones todavía se exponen como `0`. Las métricas son
+acumuladas desde el inicio del proceso, excepto los totales persistentes de la
+outbox, que sobreviven reinicios.
+
 ## Seguridad
 
 El endpoint y los logs no muestran:
