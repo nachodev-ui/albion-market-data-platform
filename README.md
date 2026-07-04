@@ -120,6 +120,7 @@ se eliminan.
 | Endpoint | Uso |
 |---|---|
 | `GET /healthz` | Estado básico del receptor |
+| `GET /metrics` | Métricas Prometheus del receiver, almacenamiento, outbox y forwarders |
 | `GET /api/v1/status` | Estado del receptor, repositorio y forwarders separados de precios e historial |
 | `GET /api/v1/markets` | Catálogo canónico de mercados habilitados |
 | `GET /api/v1/prices` | Precio de venta mínimo y compra máxima para varios objetos |
@@ -200,6 +201,17 @@ Invoke-RestMethod http://127.0.0.1:8787/api/v1/status |
 ```
 
 La documentación detallada está en `docs/OBSERVABILIDAD.md` y `docs/FORWARDER_HISTORICO.md`.
+
+Las métricas Prometheus se consultan sin inspeccionar archivos locales:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8787/metrics |
+    Select-Object -ExpandProperty Content
+```
+
+El endpoint incluye contadores de capturas, entradas, almacenados, duplicados,
+errores de normalización y almacenamiento; estado de outbox y forwarders;
+latencias; bytes por área; uptime y metadatos del build.
 
 ## Forwarder histórico central
 

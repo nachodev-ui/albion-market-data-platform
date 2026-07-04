@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"albion-market-data/collector/internal/domain"
+	"albion-market-data/collector/internal/observability"
 	"albion-market-data/collector/internal/storage/durable"
 )
 
@@ -19,6 +20,7 @@ type Store struct {
 	mu          sync.Mutex
 	historyKeys map[string]struct{}
 	orderKeys   map[string]struct{}
+	metrics     *observability.Registry
 }
 
 type orderFileBatch struct {
@@ -27,6 +29,10 @@ type orderFileBatch struct {
 }
 
 func NewStore(directory string) (*Store, error) {
+	return NewStoreWithMetrics(directory, nil)
+}
+
+func NewStoreWithMetrics(directory string, metrics *observability.Registry) (*Store, error) {
 	if directory == "" {
 		return nil, fmt.Errorf("normalized data directory is required")
 	}
@@ -40,6 +46,7 @@ func NewStore(directory string) (*Store, error) {
 		directory:   directory,
 		historyKeys: make(map[string]struct{}),
 		orderKeys:   make(map[string]struct{}),
+		metrics:     metrics,
 	}
 	if err := store.loadExistingKeys(); err != nil {
 		return nil, err
@@ -64,8 +71,10 @@ func (s *Store) AppendHistory(ctx context.Context, history domain.NormalizedHist
 	}
 	filename := "market-history-" + history.CapturedAt.UTC().Format("2006-01-02") + ".jsonl"
 	if err := appendJSON(filepath.Join(s.directory, filename), history); err != nil {
+		s.metrics.RecordStorageError("normalized", err)
 		return false, err
 	}
+	s.metrics.RecordStorageSuccess("normalized")
 	s.historyKeys[history.DedupeKey] = struct{}{}
 	return true, nil
 }
@@ -121,8 +130,11 @@ func (s *Store) AppendOrders(ctx context.Context, orders []domain.NormalizedMark
 		}
 		batch := batches[filename]
 		if err := durable.AppendJSONLines(filepath.Join(s.directory, filename), batch.orders); err != nil {
-			return written, duplicates, fmt.Errorf("append normalized order batch: %w", err)
+			wrapped := fmt.Errorf("append normalized order batch: %w", err)
+			s.metrics.RecordStorageError("normalized", wrapped)
+			return written, duplicates, wrapped
 		}
+		s.metrics.RecordStorageSuccess("normalized")
 		for _, key := range batch.keys {
 			s.orderKeys[key] = struct{}{}
 		}

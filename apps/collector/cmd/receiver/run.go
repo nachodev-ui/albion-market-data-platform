@@ -29,6 +29,7 @@ import (
 func run() error {
 	loadDotEnv()
 	startedAt := time.Now().UTC()
+	metricsRegistry := observability.NewRegistry(startedAt)
 
 	upstreamEnabledDefault := envBool("UPSTREAM_ENABLED", false)
 	upstreamHistoryEnabledDefault := envBool("UPSTREAM_HISTORY_ENABLED", upstreamEnabledDefault)
@@ -94,15 +95,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	rawStore, err := rawjsonl.NewStore(rawDirectory)
+	rawStore, err := rawjsonl.NewStoreWithMetrics(rawDirectory, metricsRegistry)
 	if err != nil {
 		return err
 	}
-	auditStore, err := normalizedjsonl.NewStore(normalizedDirectory)
+	auditStore, err := normalizedjsonl.NewStoreWithMetrics(normalizedDirectory, metricsRegistry)
 	if err != nil {
 		return err
 	}
-	database, err := localdb.New(*databasePath)
+	database, err := localdb.NewWithMetrics(*databasePath, metricsRegistry)
 	if err != nil {
 		return err
 	}
@@ -189,7 +190,7 @@ func run() error {
 		}
 	}
 
-	ingestHandler, err := httpingest.NewHandler(*serverName, rawStore, normalizer, priceForwarder, historyForwarder, logger)
+	ingestHandler, err := httpingest.NewHandlerWithOptions(*serverName, rawStore, normalizer, priceForwarder, historyForwarder, logger, httpingest.Options{Metrics: metricsRegistry})
 	if err != nil {
 		return err
 	}
@@ -206,10 +207,26 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	metricsHandler := httpapi.NewMetricsHandler(httpapi.MetricsConfig{
+		Registry: metricsRegistry,
+		Storage: observability.NewStorageUsage(observability.StoragePaths{
+			RawDirectory:        rawDirectory,
+			NormalizedDirectory: normalizedDirectory,
+			DatabasePath:        *databasePath,
+			OutboxPath:          *upstreamOutboxPath,
+			MaxBytes:            envInt64Value("STORAGE_MAX_BYTES", 10<<30),
+		}, 5*time.Second),
+		Build:                         observability.CurrentBuildInfo(),
+		Forwarder:                     priceForwarder,
+		ForwarderQueueCapacity:        *upstreamQueueSize,
+		HistoryForwarder:              historyForwarder,
+		HistoryForwarderQueueCapacity: *upstreamHistoryQueueSize,
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle(httpapi.RouteHealth, apiHandler)
 	mux.Handle(httpapi.RouteReady, apiHandler)
+	mux.Handle(httpapi.RouteMetrics, metricsHandler)
 	mux.Handle("/api/v1/", apiHandler)
 	mux.Handle("/", ingestHandler)
 
@@ -234,6 +251,7 @@ func run() error {
 		observability.F("health", "http://"+*listenAddress+httpapi.RouteHealth),
 		observability.F("readiness", "http://"+*listenAddress+httpapi.RouteReady),
 		observability.F("status", "http://"+*listenAddress+httpapi.RouteStatus),
+		observability.F("metrics", "http://"+*listenAddress+httpapi.RouteMetrics),
 		observability.F("raw_directory", absoluteRawDirectory),
 		observability.F("normalized_directory", absoluteNormalizedDirectory),
 		observability.F("database", absoluteDatabasePath),

@@ -41,6 +41,7 @@ type eventLogger interface {
 
 type Options struct {
 	MaxConcurrent int
+	Metrics       *observability.Registry
 }
 
 type Handler struct {
@@ -50,6 +51,7 @@ type Handler struct {
 	priceForwarder   PriceForwarder
 	historyForwarder HistoryForwarder
 	logger           eventLogger
+	metrics          *observability.Registry
 	now              func() time.Time
 	ingestSlots      chan struct{}
 }
@@ -91,6 +93,7 @@ func NewHandlerWithOptions(server string, rawStore RawStore, normalizer *normali
 		priceForwarder:   priceForwarder,
 		historyForwarder: historyForwarder,
 		logger:           logger,
+		metrics:          options.Metrics,
 		now:              time.Now,
 		ingestSlots:      make(chan struct{}, maxConcurrent),
 	}, nil
@@ -149,7 +152,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body is too large or unreadable"})
 		return
 	}
+	h.metrics.RecordCapture(topic, len(body))
 	if !json.Valid(body) {
+		if pipeline := ingestPipeline(topic); pipeline != "" {
+			h.metrics.RecordNormalizationError(pipeline)
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body must be valid JSON"})
 		return
 	}
@@ -183,10 +190,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request, body []byte, receivedAt time.Time) {
 	var upload domain.MarketHistoriesUpload
 	if err := json.Unmarshal(body, &upload); err != nil {
+		h.metrics.RecordNormalizationError("history")
 		h.logEvent(observability.LevelWarn, "ingest.history_invalid", observability.F("error", err))
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid market history payload"})
 		return
 	}
+
+	h.metrics.RecordEntriesReceived("history", 1)
 
 	capture := domain.CapturedHistory{
 		SchemaVersion: 1,
@@ -197,6 +207,7 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request, body []b
 	}
 	normalized, stored, err := h.normalizer.CaptureHistory(r.Context(), capture)
 	if err != nil {
+		h.metrics.RecordNormalizationError("history")
 		// El evento crudo ya está a salvo. Un 202 evita que una carencia temporal
 		// del catálogo haga que el cliente reintente indefinidamente.
 		h.logEvent(observability.LevelWarn, "ingest.history_pending", observability.F("albion_id", upload.AlbionID), observability.F("error", err))
@@ -235,6 +246,12 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request, body []b
 		}
 	}
 
+	if stored {
+		h.metrics.RecordPersistence("history", 1, 0)
+	} else {
+		h.metrics.RecordPersistence("history", 0, 1)
+	}
+
 	h.logEvent(
 		observability.LevelOK,
 		"ingest.history_completed",
@@ -271,12 +288,15 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request, body []b
 func (h *Handler) handleOrders(w http.ResponseWriter, r *http.Request, body []byte, receivedAt time.Time) {
 	var upload domain.MarketOrdersUpload
 	if err := json.Unmarshal(body, &upload); err != nil {
+		h.metrics.RecordNormalizationError("prices")
 		h.logEvent(observability.LevelWarn, "ingest.orders_invalid", observability.F("error", err))
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid market orders payload"})
 		return
 	}
+	h.metrics.RecordEntriesReceived("prices", len(upload.Orders))
 	normalizedOrders, result, err := h.normalizer.CaptureOrdersDetailed(r.Context(), "aodp-http-ingest", h.server, receivedAt, upload)
 	if err != nil {
+		h.metrics.RecordNormalizationError("prices")
 		h.logEvent(observability.LevelWarn, "ingest.orders_pending", observability.F("error", err))
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"status": "raw-stored-normalization-pending",
@@ -309,6 +329,7 @@ func (h *Handler) handleOrders(w http.ResponseWriter, r *http.Request, body []by
 		}
 	}
 
+	h.metrics.RecordPersistence("prices", result.Stored, result.Duplicates)
 	h.logEvent(observability.LevelOK, "ingest.orders_completed", observability.F("received", result.Received), observability.F("stored", result.Stored), observability.F("duplicates", result.Duplicates), observability.F("forwarded", forwarded), observability.F("dropped", dropped))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     "normalized",
@@ -319,6 +340,17 @@ func (h *Handler) handleOrders(w http.ResponseWriter, r *http.Request, body []by
 		"forwarded":  forwarded,
 		"dropped":    dropped,
 	})
+}
+
+func ingestPipeline(topic string) string {
+	switch topic {
+	case "marketorders.ingest":
+		return "prices"
+	case "markethistories.ingest":
+		return "history"
+	default:
+		return ""
+	}
 }
 
 func (h *Handler) logEvent(level observability.Level, event string, fields ...observability.Field) {

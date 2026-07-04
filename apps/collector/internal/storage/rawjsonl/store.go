@@ -7,22 +7,28 @@ import (
 	"sync"
 
 	"albion-market-data/collector/internal/domain"
+	"albion-market-data/collector/internal/observability"
 	"albion-market-data/collector/internal/storage/durable"
 )
 
 type Store struct {
 	directory string
 	mu        sync.Mutex
+	metrics   *observability.Registry
 }
 
 func NewStore(directory string) (*Store, error) {
+	return NewStoreWithMetrics(directory, nil)
+}
+
+func NewStoreWithMetrics(directory string, metrics *observability.Registry) (*Store, error) {
 	if directory == "" {
 		return nil, fmt.Errorf("data directory is required")
 	}
 	if _, err := durable.RepairJSONLPatterns(directory, 20<<20, "raw-ingest-*.jsonl"); err != nil {
 		return nil, fmt.Errorf("repair raw JSONL: %w", err)
 	}
-	return &Store{directory: directory}, nil
+	return &Store{directory: directory, metrics: metrics}, nil
 }
 
 func (s *Store) AppendRaw(ctx context.Context, event domain.RawIngestEvent) error {
@@ -39,7 +45,10 @@ func (s *Store) AppendRaw(ctx context.Context, event domain.RawIngestEvent) erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := durable.AppendJSONLine(path, event); err != nil {
-		return fmt.Errorf("append %s: %w", path, err)
+		wrapped := fmt.Errorf("append %s: %w", path, err)
+		s.metrics.RecordStorageError("raw", wrapped)
+		return wrapped
 	}
+	s.metrics.RecordStorageSuccess("raw")
 	return nil
 }
