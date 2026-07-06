@@ -17,6 +17,11 @@ data/**/*.json
 .env.*
 !.env.example
 
+# Node and documentation
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 # Editors / OS
 .vscode/
 .idea/
