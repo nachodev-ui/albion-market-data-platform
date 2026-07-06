@@ -25,7 +25,8 @@ function Invoke-RebuildDb {
     if (Test-Path $nativeTool) {
         & $nativeTool @argsList
     } elseif (Test-Path $sourceTool) {
-        & go @("run", "./apps/collector/cmd/rebuilddb") @argsList
+        $goArgs = @("run", "./apps/collector/cmd/rebuilddb") + $argsList
+        & go @goArgs
     } else {
         throw "No se encontró albion-market-rebuilddb.exe ni el código fuente de rebuilddb."
     }
