@@ -67,7 +67,8 @@ try {
     if (Test-Path $nativeTool) {
         & $nativeTool @argsList
     } elseif (Test-Path $sourceTool) {
-        & go @("run", "./apps/collector/cmd/backfillhistory") @argsList
+        $goArgs = @("run", "./apps/collector/cmd/backfillhistory") + $argsList
+        & go @goArgs
     } else {
         throw "No se encontró albion-market-backfill-history.exe ni el código fuente de backfillhistory."
     }
