@@ -384,7 +384,7 @@ func formatValue(value any) string {
 		switch reflected.Kind() {
 		case reflect.Map, reflect.Slice, reflect.Array:
 			if encoded, err := json.Marshal(value); err == nil {
-				return strconv.Quote(string(encoded))
+				return string(encoded)
 			}
 		}
 	}
