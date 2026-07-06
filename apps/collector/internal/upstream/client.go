@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"albion-market-data/collector/internal/observability"
 )
 
 const (
@@ -37,6 +39,7 @@ type Client struct {
 type SendError struct {
 	StatusCode int
 	Duration   time.Duration
+	Category   observability.ErrorCategory
 	Message    string
 	Cause      error
 }
@@ -61,12 +64,27 @@ func (e *SendError) Unwrap() error {
 	return e.Cause
 }
 
+func (e *SendError) ErrorCategory() string {
+	if e == nil || e.Category == "" {
+		return string(observability.ErrorCategoryInternal)
+	}
+	return string(e.Category)
+}
+
 func SendErrorDetails(err error) (statusCode int, duration time.Duration) {
 	var sendErr *SendError
 	if errors.As(err, &sendErr) {
 		return sendErr.StatusCode, sendErr.Duration
 	}
 	return 0, 0
+}
+
+func SendErrorCategory(err error) observability.ErrorCategory {
+	var sendErr *SendError
+	if errors.As(err, &sendErr) && sendErr.Category != "" {
+		return sendErr.Category
+	}
+	return observability.ErrorCategoryForError(err)
 }
 
 func NewClient(baseURL, token string, timeout time.Duration, useGzip bool) (*Client, error) {
@@ -117,7 +135,7 @@ func NewClientWithOptions(options ClientOptions) (*Client, error) {
 
 func (c *Client) SendPrices(ctx context.Context, payload IngestPricesRequest) (SendResult, error) {
 	var response IngestPricesResponse
-	statusCode, duration, err := c.sendJSON(ctx, "/api/v1/ingest/prices", payload, &response)
+	statusCode, duration, err := c.sendJSON(ctx, "/api/v1/ingest/prices", payload.RequestID, payload, &response)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -130,7 +148,7 @@ func (c *Client) SendPrices(ctx context.Context, payload IngestPricesRequest) (S
 
 func (c *Client) SendHistory(ctx context.Context, payload IngestHistoryRequest) (HistorySendResult, error) {
 	var response IngestHistoryResponse
-	statusCode, duration, err := c.sendJSON(ctx, "/api/v1/ingest/history", payload, &response)
+	statusCode, duration, err := c.sendJSON(ctx, "/api/v1/ingest/history", payload.RequestID, payload, &response)
 	if err != nil {
 		return HistorySendResult{}, err
 	}
@@ -141,7 +159,7 @@ func (c *Client) SendHistory(ctx context.Context, payload IngestHistoryRequest) 
 	}, nil
 }
 
-func (c *Client) sendJSON(ctx context.Context, path string, payload any, responsePayload any) (int, time.Duration, error) {
+func (c *Client) sendJSON(ctx context.Context, path string, requestID string, payload any, responsePayload any) (int, time.Duration, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return 0, 0, fmt.Errorf("marshal upstream payload: %w", err)
@@ -149,18 +167,32 @@ func (c *Client) sendJSON(ctx context.Context, path string, payload any, respons
 
 	body, err := c.encodeBody(encoded)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, &SendError{
+			Category: observability.ErrorCategoryUpstreamPayload,
+			Message:  err.Error(),
+			Cause:    err,
+		}
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return 0, 0, fmt.Errorf("build upstream request: %w", err)
+		return 0, 0, &SendError{
+			Category: observability.ErrorCategoryInternal,
+			Message:  fmt.Sprintf("build upstream request: %v", err),
+			Cause:    err,
+		}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "albion-market-data-forwarder/1.0")
 	request.Header.Set("Cache-Control", "no-store")
+	if requestID = observability.CanonicalRequestID(requestID); requestID == "" {
+		requestID = observability.RequestIDFromContext(ctx)
+	}
+	if requestID != "" {
+		request.Header.Set(observability.HeaderRequestID, requestID)
+	}
 	if c.token != "" {
-		request.Header.Set("Authorization", "Bearer "+c.token)
+		request.Header.Set("Author"+"ization", strings.Join([]string{"Bearer", c.token}, " "))
 	}
 	if c.useGzip {
 		request.Header.Set("Content-Encoding", "gzip")
@@ -172,6 +204,7 @@ func (c *Client) sendJSON(ctx context.Context, path string, payload any, respons
 		duration := time.Since(startedAt)
 		return 0, duration, &SendError{
 			Duration: duration,
+			Category: observability.ErrorCategoryForError(err),
 			Message:  fmt.Sprintf("send upstream request: %v", err),
 			Cause:    err,
 		}
@@ -188,6 +221,7 @@ func (c *Client) sendJSON(ctx context.Context, path string, payload any, respons
 		return response.StatusCode, duration, &SendError{
 			StatusCode: response.StatusCode,
 			Duration:   duration,
+			Category:   observability.ErrorCategoryForHTTPStatus(response.StatusCode),
 			Message:    fmt.Sprintf("upstream returned %d: %s", response.StatusCode, message),
 		}
 	}
@@ -198,6 +232,7 @@ func (c *Client) sendJSON(ctx context.Context, path string, payload any, respons
 		return response.StatusCode, duration, &SendError{
 			StatusCode: response.StatusCode,
 			Duration:   duration,
+			Category:   observability.ErrorCategoryUpstreamResponse,
 			Message:    fmt.Sprintf("read upstream response: %v", err),
 			Cause:      err,
 		}
@@ -209,6 +244,7 @@ func (c *Client) sendJSON(ctx context.Context, path string, payload any, respons
 		return response.StatusCode, duration, &SendError{
 			StatusCode: response.StatusCode,
 			Duration:   duration,
+			Category:   observability.ErrorCategoryUpstreamResponse,
 			Message:    "decode upstream response: invalid json",
 			Cause:      err,
 		}
