@@ -4,6 +4,21 @@ Servicio local en Go para capturar los paquetes de mercado enviados por Albion
 Data Client, conservarlos como auditoría, normalizarlos y servirlos a la
 calculadora React sin consultar directamente la API pública de AODP.
 
+## Documentación operativa
+
+La documentación completa de instalación, configuración, operación,
+recuperación, releases y mantenimiento vive en `docs/` y se publica con
+VitePress mediante GitHub Pages.
+
+Consulta especialmente:
+
+- `docs/guide/installation.md`
+- `docs/guide/configuration.md`
+- `docs/operations/index.md`
+- `docs/recovery/backup-restore.md`
+- `docs/release/index.md`
+- `docs/testing/index.md`
+
 ## Inicio rápido recomendado
 
 Desde la raíz de `albion-market-data-platform`:
@@ -87,9 +102,11 @@ Después vuelve a iniciar:
 
 ## Requisitos
 
-- Go 1.23 o posterior.
+- Go 1.23 o posterior para desarrollo desde código fuente.
 - PowerShell en Windows.
 - Albion Data Client.
+
+La distribución nativa Windows publicada en GitHub Releases no requiere Go para ejecutar el receiver.
 
 ## Primera ejecución
 
