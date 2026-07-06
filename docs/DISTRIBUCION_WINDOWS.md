@@ -22,6 +22,9 @@ El `.zip` de Windows contiene:
 albion-market-receiver.exe
 tools/albion-market-outboxctl.exe
 tools/albion-market-backfill-history.exe
+tools/albion-market-storagectl.exe
+tools/albion-market-reprocess.exe
+tools/albion-market-rebuilddb.exe
 scripts/
 .env.example
 catalog/
@@ -44,6 +47,10 @@ Copy-Item .env.example .env
 
 El comando `--version` imprime versión, commit, fecha de build, versión de Go y
 si el árbol usado por el build estaba modificado.
+
+## Scripts incluidos
+
+Los scripts PowerShell incluidos en `scripts/` usan los binarios de `tools/` cuando están presentes. En un checkout de desarrollo, caen a `go run`.
 
 ## Build reproducible
 
