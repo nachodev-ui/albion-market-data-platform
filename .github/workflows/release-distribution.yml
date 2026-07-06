@@ -86,6 +86,9 @@ jobs:
           go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-receiver.exe .\cmd\receiver
           go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-outboxctl.exe .\cmd\outboxctl
           go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-backfill-history.exe .\cmd\backfillhistory
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-storagectl.exe .\cmd\storagectl
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-reprocess.exe .\cmd\reprocess
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-rebuilddb.exe .\cmd\rebuilddb
 
           $env:GOOS = "linux"
           $env:GOARCH = "amd64"
@@ -102,21 +105,19 @@ jobs:
           $releaseRoot = "dist\release"
           New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
           New-Item -ItemType Directory -Force -Path "$packageRoot\tools" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$packageRoot\docs" | Out-Null
           New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
 
           Copy-Item dist\bin\windows-amd64\albion-market-receiver.exe $packageRoot
           Copy-Item dist\bin\windows-amd64\albion-market-outboxctl.exe "$packageRoot\tools"
           Copy-Item dist\bin\windows-amd64\albion-market-backfill-history.exe "$packageRoot\tools"
+          Copy-Item dist\bin\windows-amd64\albion-market-storagectl.exe "$packageRoot\tools"
+          Copy-Item dist\bin\windows-amd64\albion-market-reprocess.exe "$packageRoot\tools"
+          Copy-Item dist\bin\windows-amd64\albion-market-rebuilddb.exe "$packageRoot\tools"
           Copy-Item .env.example "$packageRoot\.env.example"
           Copy-Item catalog "$packageRoot\catalog" -Recurse
           Copy-Item scripts "$packageRoot\scripts" -Recurse
           Copy-Item README.md "$packageRoot\README.md"
-          Copy-Item docs\DISTRIBUCION_WINDOWS.md "$packageRoot\docs\DISTRIBUCION_WINDOWS.md"
-          Copy-Item docs\OBSERVABILIDAD.md "$packageRoot\docs\OBSERVABILIDAD.md"
-          Copy-Item docs\RUNBOOK_RECEIVER_DEGRADED.md "$packageRoot\docs\RUNBOOK_RECEIVER_DEGRADED.md"
-          Copy-Item docs\OUTBOX_Y_BACKFILL.md "$packageRoot\docs\OUTBOX_Y_BACKFILL.md"
-          Copy-Item docs\SEGURIDAD_SECRETOS.md "$packageRoot\docs\SEGURIDAD_SECRETOS.md"
+          Copy-Item docs "$packageRoot\docs" -Recurse
 
           @"
           # Albion Market Data Platform $version
@@ -130,7 +131,7 @@ jobs:
           .\albion-market-receiver.exe --version
           ```
 
-          Este paquete no requiere Go instalado para ejecutar el receiver.
+          Este paquete no requiere Go instalado para ejecutar el receiver. Los scripts de operación usan los binarios de tools cuando están presentes.
 
           El ejecutable no incluye firma Authenticode. La evidencia de build se publica mediante checksums, SBOM y GitHub artifact attestations con firma keyless.
           "@ | Set-Content -Encoding UTF8 "$packageRoot\INSTALL.md"
@@ -170,6 +171,7 @@ jobs:
           Push-Location $installRoot
           Copy-Item .env.example .env
           .\albion-market-receiver.exe --version
+          .\scripts\outbox-dead-letter.ps1 -Action list
           Pop-Location
 
       - name: Upload release package artifact
