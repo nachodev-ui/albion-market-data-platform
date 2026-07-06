@@ -6,9 +6,35 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$BaseUrl = $BaseUrl.TrimEnd("/")
 
 Write-Host "Estado del servicio"
-Invoke-RestMethod "$BaseUrl/api/v1/status" | ConvertTo-Json -Depth 10
+$status = Invoke-RestMethod "$BaseUrl/api/v1/status"
+$status | ConvertTo-Json -Depth 10
+
+Write-Host "`nMétricas Prometheus"
+$metricsResponse = Invoke-WebRequest "$BaseUrl/metrics"
+if ($metricsResponse.StatusCode -ne 200) {
+    throw "metrics returned $($metricsResponse.StatusCode)"
+}
+if ($metricsResponse.Headers["Content-Type"] -notmatch "text/plain") {
+    throw "metrics Content-Type is not text/plain"
+}
+$metrics = $metricsResponse.Content
+$requiredMetrics = @(
+    "albion_receiver_uptime_seconds",
+    "albion_receiver_build_info",
+    "albion_receiver_captures_received_total",
+    "albion_receiver_storage_errors_total",
+    "albion_receiver_forwarder_enabled",
+    "albion_receiver_outbox_depth"
+)
+foreach ($metric in $requiredMetrics) {
+    if ($metrics -notmatch $metric) {
+        throw "metric $metric is missing"
+    }
+}
+Write-Host "Métricas obligatorias presentes"
 
 Write-Host "`nCatálogo de mercados"
 Invoke-RestMethod "$BaseUrl/api/v1/markets" | ConvertTo-Json -Depth 10
