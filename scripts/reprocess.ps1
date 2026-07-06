@@ -38,7 +38,8 @@ function Invoke-ReprocessTool {
     if (Test-Path $nativeReprocess) {
         & $nativeReprocess @argsList
     } elseif (Test-Path $sourceReprocess) {
-        & go @("run", "./apps/collector/cmd/reprocess") @argsList
+        $goArgs = @("run", "./apps/collector/cmd/reprocess") + $argsList
+        & go @goArgs
     } else {
         throw "No se encontró albion-market-reprocess.exe ni el código fuente de reprocess."
     }
@@ -56,7 +57,8 @@ function Invoke-RebuildDbTool {
     if (Test-Path $nativeRebuild) {
         & $nativeRebuild @argsList
     } elseif (Test-Path $sourceRebuild) {
-        & go @("run", "./apps/collector/cmd/rebuilddb") @argsList
+        $goArgs = @("run", "./apps/collector/cmd/rebuilddb") + $argsList
+        & go @goArgs
     } else {
         throw "No se encontró albion-market-rebuilddb.exe ni el código fuente de rebuilddb."
     }
