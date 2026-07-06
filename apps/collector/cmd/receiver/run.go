@@ -44,13 +44,14 @@ func run() error {
 	serverName := flag.String("server", envString("ALBION_SERVER", "west"), "Albion server: west, east or europe")
 	environment := flag.String("environment", envString("APP_ENV", "development"), "runtime environment name")
 	logColor := flag.String("log-color", envString("LOG_COLOR", "auto"), "log colors: auto, always or never")
+	logFormat := flag.String("log-format", envString("LOG_FORMAT", "text"), "log format: text or json")
 	databasePath := flag.String("database", envString("LOCAL_DATABASE_PATH", ""), "embedded local database path; defaults to <data-dir>/database/market-state.json")
 	upstreamEnabled := flag.Bool("upstream-enabled", upstreamEnabledDefault, "forward normalized current-price snapshots to the shared upstream API")
 	upstreamHistoryEnabled := flag.Bool("upstream-history-enabled", upstreamHistoryEnabledDefault, "forward normalized market history to the shared upstream API")
 	upstreamBaseURL := flag.String("upstream-base-url", envString("UPSTREAM_BASE_URL", ""), "shared upstream API base URL")
-	upstreamToken := flag.String("upstream-token", envString("UPSTREAM_TOKEN", ""), "bearer token used for the shared upstream API; prefer --upstream-token-file")
-	upstreamTokenFile := flag.String("upstream-token-file", envString("UPSTREAM_TOKEN_FILE", ""), "path to a file containing the upstream bearer token")
-	upstreamMinTokenLength := flag.Int("upstream-min-token-length", envInt("UPSTREAM_MIN_TOKEN_LENGTH", 32), "minimum accepted bearer-token length")
+	upstreamToken := flag.String("upstream-token", envString("UPSTREAM_TOKEN", ""), "credential used for the shared upstream API; prefer --upstream-token-file")
+	upstreamTokenFile := flag.String("upstream-token-file", envString("UPSTREAM_TOKEN_FILE", ""), "path to a file containing the upstream credential")
+	upstreamMinTokenLength := flag.Int("upstream-min-token-length", envInt("UPSTREAM_MIN_TOKEN_LENGTH", 32), "minimum accepted credential length")
 	upstreamRequireHTTPS := flag.Bool("upstream-require-https", envBool("UPSTREAM_REQUIRE_HTTPS", upstreamRequireHTTPSDefault), "require HTTPS for upstream requests")
 	upstreamBatchSize := flag.Int("upstream-batch-size", envInt("UPSTREAM_BATCH_SIZE", 500), "maximum number of price entries per upstream batch")
 	upstreamFlushInterval := flag.Duration("upstream-flush-interval", envDuration("UPSTREAM_FLUSH_INTERVAL", 250*time.Millisecond), "maximum time before flushing a price batch")
@@ -120,7 +121,7 @@ func run() error {
 		return err
 	}
 
-	logger := observability.NewLogger(os.Stdout, *logColor)
+	logger := observability.NewLoggerWithOptions(os.Stdout, observability.LoggerOptions{ColorMode: *logColor, Format: *logFormat})
 
 	var priceForwarder *upstream.Forwarder
 	var historyForwarder *upstream.HistoryForwarder
@@ -232,7 +233,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              *listenAddress,
-		Handler:           mux,
+		Handler:           observability.WithRequestID(observability.WithHTTPLogging(mux, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -257,6 +258,7 @@ func run() error {
 		observability.F("database", absoluteDatabasePath),
 		observability.F("histories_imported", imported.HistoryImported),
 		observability.F("orders_imported", imported.OrdersImported),
+		observability.F("log_format", *logFormat),
 		observability.F("color", *logColor),
 	)
 	if priceForwarder != nil {
