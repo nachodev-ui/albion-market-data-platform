@@ -192,7 +192,7 @@ func (c *Client) sendJSON(ctx context.Context, path string, requestID string, pa
 		request.Header.Set(observability.HeaderRequestID, requestID)
 	}
 	if c.token != "" {
-		request.Header.Set("Author" + "ization", strings.Join([]string{"Bearer", c.token}, " "))
+		request.Header.Set("Author"+"ization", strings.Join([]string{"Bearer", c.token}, " "))
 	}
 	if c.useGzip {
 		request.Header.Set("Content-Encoding", "gzip")
