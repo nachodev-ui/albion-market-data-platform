@@ -52,7 +52,7 @@ func TestJSONLoggerDisablesColorAndEmitsStructuredRecord(t *testing.T) {
 		F("request_id", "req-12345678"),
 		F("headers", http.Header{
 			"Authorization": []string{"Bearer secret-token"},
-			"User-Agent":   []string{"aodp-test"},
+			"User-Agent":    []string{"aodp-test"},
 		}),
 		F("error", errors.New("invalid json")),
 	)
