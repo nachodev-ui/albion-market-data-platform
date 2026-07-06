@@ -26,7 +26,8 @@ try {
     if (Test-Path $nativeTool) {
         & $nativeTool @argsList
     } elseif (Test-Path $sourceTool) {
-        & go @("run", "./apps/collector/cmd/outboxctl") @argsList
+        $goArgs = @("run", "./apps/collector/cmd/outboxctl") + $argsList
+        & go @goArgs
     } else {
         throw "No se encontró albion-market-outboxctl.exe ni el código fuente de outboxctl."
     }
