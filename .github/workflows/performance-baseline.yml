@@ -7,13 +7,6 @@ on:
     branches:
       - develop
       - main
-    paths:
-      - apps/collector/cmd/perfbaseline/**
-      - apps/collector/internal/**
-      - performance/receiver-budgets.json
-      - scripts/benchmark-receiver-baseline.ps1
-      - docs/RENDIMIENTO_BASELINE_COMPLETO.md
-      - .github/workflows/performance-baseline.yml
   push:
     branches:
       - develop
