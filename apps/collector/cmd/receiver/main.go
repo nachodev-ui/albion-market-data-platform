@@ -1,11 +1,19 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
+
+	"albion-market-data/collector/internal/observability"
 )
 
 func main() {
+	if isVersionRequest(os.Args[1:]) {
+		fmt.Println(formatVersion(observability.CurrentBuildInfo()))
+		return
+	}
+
 	loadDotEnv()
 	storageLock, err := prepareLocalStorage(storagePathsFromArgs(os.Args[1:]))
 	if err != nil {
