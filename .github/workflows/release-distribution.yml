@@ -105,7 +105,6 @@ jobs:
           $releaseRoot = "dist\release"
           New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
           New-Item -ItemType Directory -Force -Path "$packageRoot\tools" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$packageRoot\docs" | Out-Null
           New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
 
           Copy-Item dist\bin\windows-amd64\albion-market-receiver.exe $packageRoot
@@ -118,11 +117,7 @@ jobs:
           Copy-Item catalog "$packageRoot\catalog" -Recurse
           Copy-Item scripts "$packageRoot\scripts" -Recurse
           Copy-Item README.md "$packageRoot\README.md"
-          Copy-Item docs\DISTRIBUCION_WINDOWS.md "$packageRoot\docs\DISTRIBUCION_WINDOWS.md"
-          Copy-Item docs\OBSERVABILIDAD.md "$packageRoot\docs\OBSERVABILIDAD.md"
-          Copy-Item docs\RUNBOOK_RECEIVER_DEGRADED.md "$packageRoot\docs\RUNBOOK_RECEIVER_DEGRADED.md"
-          Copy-Item docs\OUTBOX_Y_BACKFILL.md "$packageRoot\docs\OUTBOX_Y_BACKFILL.md"
-          Copy-Item docs\SEGURIDAD_SECRETOS.md "$packageRoot\docs\SEGURIDAD_SECRETOS.md"
+          Copy-Item docs "$packageRoot\docs" -Recurse
 
           @"
           # Albion Market Data Platform $version
