@@ -28,6 +28,10 @@ jobs:
   build:
     name: Build documentation
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
 
     steps:
       - name: Checkout
@@ -45,6 +49,17 @@ jobs:
 
       - name: Build VitePress
         run: npm run docs:build
+
+      - name: Ensure Pages site exists
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/pages" > /dev/null 2>&1; then
+            echo "GitHub Pages site already exists."
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/pages" -f build_type=workflow
+          fi
 
       - name: Configure Pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
