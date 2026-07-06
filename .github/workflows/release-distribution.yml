@@ -112,6 +112,7 @@ jobs:
           Copy-Item catalog "$packageRoot\catalog" -Recurse
           Copy-Item scripts "$packageRoot\scripts" -Recurse
           Copy-Item README.md "$packageRoot\README.md"
+          Copy-Item docs\DISTRIBUCION_WINDOWS.md "$packageRoot\docs\DISTRIBUCION_WINDOWS.md"
           Copy-Item docs\OBSERVABILIDAD.md "$packageRoot\docs\OBSERVABILIDAD.md"
           Copy-Item docs\RUNBOOK_RECEIVER_DEGRADED.md "$packageRoot\docs\RUNBOOK_RECEIVER_DEGRADED.md"
           Copy-Item docs\OUTBOX_Y_BACKFILL.md "$packageRoot\docs\OUTBOX_Y_BACKFILL.md"
@@ -217,5 +218,7 @@ jobs:
           The executable is not Authenticode-signed. Build evidence is provided through checksums, SBOM and GitHub artifact attestations.
           "@ | Set-Content -Encoding UTF8 $notes
 
-          $assets = Get-ChildItem $releaseRoot -File | ForEach-Object { $_.FullName }
+          $assets = Get-ChildItem $releaseRoot -File |
+              Where-Object { $_.Name -ne "RELEASE_NOTES.md" } |
+              ForEach-Object { $_.FullName }
           gh release create $tag @assets --title $tag --notes-file $notes --verify-tag
