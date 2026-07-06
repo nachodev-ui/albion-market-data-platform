@@ -6,16 +6,6 @@ on:
     branches:
       - develop
       - main
-    paths:
-      - apps/collector/cmd/receiver/**
-      - apps/collector/cmd/storagectl/**
-      - apps/collector/internal/instancelock/**
-      - apps/collector/internal/storage/**
-      - apps/collector/internal/upstream/**
-      - scripts/backup-local-storage.ps1
-      - scripts/verify-local-storage-backup.ps1
-      - scripts/restore-local-storage.ps1
-      - .github/workflows/storage.yml
   push:
     branches:
       - develop
