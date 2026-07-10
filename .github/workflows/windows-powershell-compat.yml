@@ -1,0 +1,73 @@
+name: Windows PowerShell compatibility
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - scripts/sync-render-ingest-token.ps1
+      - .github/workflows/windows-powershell-compat.yml
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - scripts/sync-render-ingest-token.ps1
+      - .github/workflows/windows-powershell-compat.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Windows PowerShell 5.1 compatibility
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Parse script with Windows PowerShell
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens = $null
+          $errors = $null
+
+          [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path "scripts/sync-render-ingest-token.ps1"),
+              [ref]$tokens,
+              [ref]$errors
+          ) | Out-Null
+
+          if (@($errors).Count -gt 0) {
+              $errors | Format-Table -AutoSize | Out-String | Write-Host
+              throw "El sincronizador no es válido en Windows PowerShell."
+          }
+
+      - name: Load and construct System.Net.Http types
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $source = Get-Content "scripts/sync-render-ingest-token.ps1" -Raw
+
+          if (-not $source.Contains('Add-Type -AssemblyName System.Net.Http -ErrorAction Stop')) {
+              throw "Falta cargar explícitamente System.Net.Http para Windows PowerShell 5.1."
+          }
+
+          Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+
+          $handler = [System.Net.Http.HttpClientHandler]::new()
+          $client = [System.Net.Http.HttpClient]::new($handler)
+
+          try {
+              if ($null -eq $client -or $null -eq $handler) {
+                  throw "No fue posible construir HttpClient en Windows PowerShell 5.1."
+              }
+          }
+          finally {
+              $client.Dispose()
+              $handler.Dispose()
+          }
