@@ -94,6 +94,8 @@ function Test-IngestAuthentication {
         [Parameter(Mandatory)] [string]$Token
     )
 
+    Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+
     $handler = [System.Net.Http.HttpClientHandler]::new()
     $client = [System.Net.Http.HttpClient]::new($handler)
     try {
@@ -224,7 +226,7 @@ try {
 
     $authCheck = Test-IngestAuthentication -BaseUrl $applicationOrigin -Token $ingestToken
 
-    Write-Host "" 
+    Write-Host ""
     Write-Host "Token de ingesta sincronizado y aceptado por Render." -ForegroundColor Green
     [pscustomobject]@{
         service_name = $ServiceName
