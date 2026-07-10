@@ -1,0 +1,107 @@
+name: Render token synchronizer
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - scripts/sync-render-ingest-token.ps1
+      - .github/workflows/render-token-sync.yml
+      - docs/operations/render-token-sync.md
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - scripts/sync-render-ingest-token.ps1
+      - .github/workflows/render-token-sync.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Render token synchronizer
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Parse synchronizer
+        run: |
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path "scripts/sync-render-ingest-token.ps1"),
+              [ref]$tokens,
+              [ref]$errors
+          )
+
+          if (@($errors).Count -gt 0) {
+              $errors | Format-Table -AutoSize | Out-String | Write-Host
+              throw "El sincronizador contiene errores de sintaxis PowerShell."
+          }
+
+          $requiredFunctions = @(
+              "Resolve-TokenSource",
+              "ConvertFrom-SecureValue",
+              "Invoke-RenderApi",
+              "Get-ServiceCandidates",
+              "Test-IngestAuthentication"
+          )
+
+          foreach ($functionName in $requiredFunctions) {
+              $functionAst = $ast.Find({
+                  param($node)
+                  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                      $node.Name -eq $functionName
+              }, $true)
+
+              if ($null -eq $functionAst) {
+                  throw "No se encontró la función requerida $functionName."
+              }
+          }
+
+      - name: Validate secret handling and API scope
+        run: |
+          $source = Get-Content "scripts/sync-render-ingest-token.ps1" -Raw
+
+          $required = @(
+              'INGEST_BEARER_TOKEN',
+              '/env-vars/$encodedVariableName',
+              'deploy_only',
+              'Read-Host "Pega el API key de Render" -AsSecureString',
+              'secrets\upstream-current.token',
+              'Test-IngestAuthentication',
+              'statusCode -eq 401',
+              'statusCode -eq 403',
+              '"{}"'
+          )
+
+          foreach ($entry in $required) {
+              if (-not $source.Contains($entry)) {
+                  throw "Falta el control requerido: $entry"
+              }
+          }
+
+          if ($source -match '(?im)Write-(?:Host|Output|Verbose|Debug).*(?:ingestToken|renderApiKey|secureApiKey)') {
+              throw "El sincronizador intenta imprimir una credencial."
+          }
+
+          if ($source.Contains('/services/$serviceId/env-vars"')) {
+              throw "El sincronizador no debe reemplazar el conjunto completo de variables."
+          }
+
+          if ($source -notmatch '(?s)-Method PUT.*?/env-vars/\$encodedVariableName') {
+              throw "La actualización no está limitada a una sola variable."
+          }
+
+          if ($source -notmatch '(?s)-Method POST.*?/deploys.*?deploy_only') {
+              throw "Falta el deploy de configuración controlado."
+          }
