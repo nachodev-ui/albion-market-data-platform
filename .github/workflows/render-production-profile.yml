@@ -127,7 +127,20 @@ jobs:
               -SkipApiCheck `
               -NoBackup | Out-Host
 
-          $environment = Get-Content $environmentPath -Raw
+          $values = @{}
+          foreach ($line in Get-Content $environmentPath) {
+              if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) {
+                  continue
+              }
+              $separator = $line.IndexOf("=")
+              if ($separator -lt 1) {
+                  continue
+              }
+              $name = $line.Substring(0, $separator).Trim()
+              $value = $line.Substring($separator + 1)
+              $values[$name] = $value
+          }
+
           $assertions = @{
               "APP_ENV" = "production"
               "LOAD_DOTENV" = "true"
@@ -138,9 +151,11 @@ jobs:
           }
 
           foreach ($entry in $assertions.GetEnumerator()) {
-              $pattern = '(?m)^' + [regex]::Escape($entry.Key) + '=' + [regex]::Escape([string]$entry.Value) + '$'
-              if ($environment -notmatch $pattern) {
-                  throw "El configurador no produjo $($entry.Key)=$($entry.Value)."
+              if (-not $values.ContainsKey($entry.Key)) {
+                  throw "El configurador no produjo la clave $($entry.Key)."
+              }
+              if ([string]$values[$entry.Key] -cne [string]$entry.Value) {
+                  throw "Valor inesperado para $($entry.Key)."
               }
           }
 
