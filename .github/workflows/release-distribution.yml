@@ -11,7 +11,6 @@ on:
       - docs/**
       - scripts/**
       - .env.example
-      - .env.production.example
       - .github/workflows/release-distribution.yml
   push:
     tags:
@@ -115,7 +114,6 @@ jobs:
           Copy-Item dist\bin\windows-amd64\albion-market-reprocess.exe "$packageRoot\tools"
           Copy-Item dist\bin\windows-amd64\albion-market-rebuilddb.exe "$packageRoot\tools"
           Copy-Item .env.example "$packageRoot\.env.example"
-          Copy-Item .env.production.example "$packageRoot\.env.production.example"
           Copy-Item catalog "$packageRoot\catalog" -Recurse
           Copy-Item scripts "$packageRoot\scripts" -Recurse
           Copy-Item README.md "$packageRoot\README.md"
@@ -132,8 +130,6 @@ jobs:
           Copy-Item .env.example .env
           .\albion-market-receiver.exe --version
           ```
-
-          Para usar la API pública de Render, ejecuta scripts\configure-render-production.ps1 con el archivo local del token.
 
           Este paquete no requiere Go instalado para ejecutar el receiver. Los scripts de operación usan los binarios de tools cuando están presentes.
 
@@ -166,46 +162,16 @@ jobs:
                   "$($hash.Hash.ToLower())  $($_.Name)"
               } | Set-Content -Encoding ASCII "$releaseRoot\SHA256SUMS.txt"
 
-      - name: Validate zip installation and Render profile
+      - name: Validate zip installation
         run: |
           $version = "${{ steps.meta.outputs.version }}"
           $zip = "dist\release\albion-market-data-platform-v$version-windows-amd64.zip"
           $installRoot = Join-Path $env:RUNNER_TEMP "AlbionMarketData"
-          $tokenSource = Join-Path $env:RUNNER_TEMP "ingest-current.token"
-          [System.IO.File]::WriteAllText(
-              $tokenSource,
-              "0123456789abcdef0123456789abcdef",
-              [System.Text.UTF8Encoding]::new($false)
-          )
-
           Expand-Archive $zip $installRoot -Force
           Push-Location $installRoot
+          Copy-Item .env.example .env
           .\albion-market-receiver.exe --version
           .\scripts\outbox-dead-letter.ps1 -Action list
-          .\scripts\configure-render-production.ps1 `
-              -EnvironmentPath .env `
-              -TokenSourcePath $tokenSource `
-              -SkipApiCheck `
-              -NoBackup | Out-Host
-
-          $environment = Get-Content .env -Raw
-          if ($environment -notmatch '(?m)^APP_ENV=production$') {
-              throw "El perfil no configuró APP_ENV=production."
-          }
-          if ($environment -notmatch '(?m)^UPSTREAM_BASE_URL=https://albion-market-api\.onrender\.com$') {
-              throw "El perfil no configuró la API pública de Render."
-          }
-          if ($environment -notmatch '(?m)^UPSTREAM_REQUIRE_HTTPS=true$') {
-              throw "El perfil no exige HTTPS."
-          }
-          if ($environment -notmatch '(?m)^UPSTREAM_TOKEN=$') {
-              throw "El perfil no dejó UPSTREAM_TOKEN vacío."
-          }
-
-          $storedToken = [System.IO.File]::ReadAllText(".\secrets\upstream-current.token")
-          if ($storedToken -ne "0123456789abcdef0123456789abcdef") {
-              throw "El token no se almacenó exactamente y sin salto de línea."
-          }
           Pop-Location
 
       - name: Upload release package artifact
