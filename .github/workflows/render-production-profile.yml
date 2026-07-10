@@ -99,7 +99,7 @@ jobs:
               throw "No se encontró Get-ApiIngestCounters."
           }
 
-          & ([scriptblock]::Create($functionAst.Extent.Text))
+          . ([scriptblock]::Create($functionAst.Extent.Text))
 
           $fixture = [pscustomobject]@{
               ingest = [pscustomobject]@{
