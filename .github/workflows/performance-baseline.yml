@@ -47,7 +47,11 @@ jobs:
 
       - name: Run comprehensive baseline
         shell: pwsh
-        run: ./scripts/benchmark-receiver-baseline.ps1 -Samples 5
+        run: |
+          # With five samples, nearest-rank p95 is the single maximum and is
+          # excessively sensitive to isolated hosted-runner pauses. Twenty
+          # samples preserve the same budgets while measuring a real p95.
+          ./scripts/benchmark-receiver-baseline.ps1 -Samples 20
 
       - name: Validate observed receiver limits
         shell: pwsh
