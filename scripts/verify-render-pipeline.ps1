@@ -7,7 +7,9 @@ param(
     [int]$TimeoutSeconds = 600,
     [int]$PollIntervalSeconds = 3,
     [switch]$SkipConfiguration,
-    [switch]$SkipAlbionDataClientLaunch
+    [switch]$SkipAlbionDataClientLaunch,
+    [switch]$KeepExistingReceiver,
+    [switch]$KeepExistingAlbionDataClient
 )
 
 Set-StrictMode -Version Latest
@@ -16,10 +18,13 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $runId = Get-Date -Format "yyyyMMdd-HHmmss"
 $artifactRoot = Join-Path $root ".e2e\artifacts\render-pipeline-$runId"
-$receiverStatusUrl = "$($ReceiverBaseUrl.TrimEnd('/'))/api/v1/status"
-$receiverMetricsUrl = "$($ReceiverBaseUrl.TrimEnd('/'))/metrics"
-$renderStatusUrl = "$($RenderBaseUrl.TrimEnd('/'))/api/v1/status"
-$renderReadyUrl = "$($RenderBaseUrl.TrimEnd('/'))/readyz"
+$receiverOrigin = $ReceiverBaseUrl.TrimEnd('/')
+$renderOrigin = $RenderBaseUrl.TrimEnd('/')
+$receiverStatusUrl = "$receiverOrigin/api/v1/status"
+$receiverMetricsUrl = "$receiverOrigin/metrics"
+$renderStatusUrl = "$renderOrigin/api/v1/status"
+$renderReadyUrl = "$renderOrigin/readyz"
+$receiverUri = [Uri]$receiverOrigin
 $receiverProcess = $null
 $clientProcess = $null
 
@@ -54,6 +59,17 @@ function Wait-JsonEndpoint {
         }
     }
     throw "No hubo respuesta de '$Uri'. Último error: $($lastError.Exception.Message)"
+}
+
+function Test-JsonEndpoint {
+    param([Parameter(Mandatory)] [string]$Uri)
+    try {
+        Invoke-RestMethod -Method Get -Uri $Uri -TimeoutSec 3 | Out-Null
+        return $true
+    }
+    catch {
+        return $false
+    }
 }
 
 function Get-MetricsText {
@@ -96,8 +112,7 @@ function Get-ApiIngestCounters {
             [string]$Path
         )
 
-        if ($null -eq $Current) { return }
-        if ($Current -is [string]) { return }
+        if ($null -eq $Current -or $Current -is [string]) { return }
 
         if ($Current -is [System.Collections.IDictionary]) {
             foreach ($key in $Current.Keys) {
@@ -160,30 +175,55 @@ function Get-CounterSum {
 }
 
 function Resolve-AlbionDataClient {
-    param([string]$RequestedPath)
+    param(
+        [string]$RequestedPath,
+        [string]$ExistingProcessPath = ""
+    )
 
-    if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) {
-        if (Test-Path -LiteralPath $RequestedPath -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $RequestedPath).Path
+    foreach ($candidate in @($RequestedPath, $ExistingProcessPath)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).Path
         }
-        throw "No se encontró Albion Data Client en '$RequestedPath'."
     }
 
-    $candidates = @(
-        (Join-Path $env:ProgramFiles "Albion Data Client\albiondata-client.exe"),
-        (Join-Path ${env:ProgramFiles(x86)} "Albion Data Client\albiondata-client.exe")
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $candidates.Add((Join-Path $env:ProgramFiles "Albion Data Client\albiondata-client.exe"))
+    }
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    if (-not [string]::IsNullOrWhiteSpace($programFilesX86)) {
+        $candidates.Add((Join-Path $programFilesX86 "Albion Data Client\albiondata-client.exe"))
+    }
 
     return $candidates |
         Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
         Select-Object -First 1
 }
 
+function Stop-ReceiverListener {
+    param([int]$Port)
+
+    if (-not (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
+        throw "No se puede reiniciar el receiver automáticamente porque Get-NetTCPConnection no está disponible. Usa -KeepExistingReceiver o detén el receiver manualmente."
+    }
+
+    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    foreach ($listener in $listeners) {
+        if ([int]$listener.OwningProcess -le 0) { continue }
+        Stop-Process -Id ([int]$listener.OwningProcess) -Force -ErrorAction Stop
+    }
+
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
+        if (-not (Test-JsonEndpoint -Uri $receiverStatusUrl)) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "El receiver anterior sigue respondiendo después de intentar reiniciarlo."
+}
+
 if (-not $SkipConfiguration) {
     $configureScript = Join-Path $PSScriptRoot "configure-render-production.ps1"
-    $configureParameters = @{
-        ApiBaseUrl = $RenderBaseUrl
-    }
+    $configureParameters = @{ ApiBaseUrl = $renderOrigin }
     if (-not [string]::IsNullOrWhiteSpace($TokenSourcePath)) {
         $configureParameters.TokenSourcePath = $TokenSourcePath
     }
@@ -196,11 +236,15 @@ if ($renderReady.status -ne "ok") {
     throw "Render readiness no está en estado ok."
 }
 
-try {
-    $receiverBefore = Invoke-RestMethod -Method Get -Uri $receiverStatusUrl -TimeoutSec 5
+$receiverAlreadyRunning = Test-JsonEndpoint -Uri $receiverStatusUrl
+if ($receiverAlreadyRunning -and -not $KeepExistingReceiver) {
+    Write-Host "Reiniciando el receiver para aplicar el perfil de Render..." -ForegroundColor Cyan
+    Stop-ReceiverListener -Port $receiverUri.Port
+    $receiverAlreadyRunning = $false
 }
-catch {
-    Write-Host "El receiver no está activo. Iniciándolo..." -ForegroundColor Cyan
+
+if (-not $receiverAlreadyRunning) {
+    Write-Host "Iniciando receiver..." -ForegroundColor Cyan
     $receiverScript = Join-Path $PSScriptRoot "receiver.ps1"
     $shell = Get-Command pwsh -ErrorAction SilentlyContinue
     if ($null -eq $shell) {
@@ -219,8 +263,14 @@ catch {
         -RedirectStandardOutput $receiverStdout `
         -RedirectStandardError $receiverStderr `
         -PassThru
+}
 
-    $receiverBefore = Wait-JsonEndpoint -Uri $receiverStatusUrl -Attempts 60 -DelaySeconds 1
+$receiverBefore = Wait-JsonEndpoint -Uri $receiverStatusUrl -Attempts 60 -DelaySeconds 1
+if (-not [bool]$receiverBefore.price_forwarder.enabled) {
+    throw "El forwarder de precios no quedó habilitado."
+}
+if (-not [bool]$receiverBefore.history_forwarder.enabled) {
+    throw "El forwarder histórico no quedó habilitado."
 }
 
 $metricsBefore = Get-MetricsText -Uri $receiverMetricsUrl
@@ -244,12 +294,30 @@ $deadLettersBefore = Get-MetricTotal -Text $metricsBefore -Name "albion_receiver
 $apiSumBefore = Get-CounterSum -Counters $apiCountersBefore
 
 if (-not $SkipAlbionDataClientLaunch) {
-    $existingClient = Get-Process -Name "albiondata-client" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -eq $existingClient) {
-        $resolvedClientPath = Resolve-AlbionDataClient -RequestedPath $AlbionDataClientPath
+    $existingClients = @(Get-Process -Name "albiondata-client" -ErrorAction SilentlyContinue)
+    $existingClientPath = ""
+    if ($existingClients.Count -gt 0) {
+        try { $existingClientPath = [string]$existingClients[0].Path } catch {}
+    }
+
+    if ($existingClients.Count -gt 0 -and $KeepExistingAlbionDataClient) {
+        Write-Host "Albion Data Client ya estaba ejecutándose; se conservará por solicitud." -ForegroundColor Yellow
+    }
+    else {
+        $resolvedClientPath = Resolve-AlbionDataClient `
+            -RequestedPath $AlbionDataClientPath `
+            -ExistingProcessPath $existingClientPath
         if ([string]::IsNullOrWhiteSpace($resolvedClientPath)) {
             throw "No se encontró Albion Data Client. Usa -AlbionDataClientPath o -SkipAlbionDataClientLaunch."
         }
+
+        foreach ($existingClient in $existingClients) {
+            Stop-Process -Id $existingClient.Id -Force -ErrorAction Stop
+        }
+        if ($existingClients.Count -gt 0) {
+            Start-Sleep -Seconds 1
+        }
+
         $clientStdout = Join-Path $artifactRoot "albion-data-client.stdout.log"
         $clientStderr = Join-Path $artifactRoot "albion-data-client.stderr.log"
         $destinations = "https+pow://albion-online-data.com,http://127.0.0.1:8787"
@@ -259,10 +327,7 @@ if (-not $SkipAlbionDataClientLaunch) {
             -RedirectStandardOutput $clientStdout `
             -RedirectStandardError $clientStderr `
             -PassThru
-        Write-Host "Albion Data Client iniciado con el receiver local." -ForegroundColor Green
-    }
-    else {
-        Write-Host "Albion Data Client ya estaba ejecutándose; se conservará el proceso existente." -ForegroundColor Yellow
+        Write-Host "Albion Data Client iniciado con AODP y el receiver local." -ForegroundColor Green
     }
 }
 
@@ -331,8 +396,8 @@ Write-Utf8Json -Value $apiCountersAfter -Path (Join-Path $artifactRoot "render-c
 $summary = [ordered]@{
     success = $success
     completed_at = (Get-Date).ToUniversalTime().ToString("o")
-    receiver_url = $ReceiverBaseUrl
-    render_url = $RenderBaseUrl
+    receiver_url = $receiverOrigin
+    render_url = $renderOrigin
     captures_delta = (Get-MetricTotal -Text $metricsAfter -Name "albion_receiver_captures_received_total") - $capturesBefore
     entries_delta = (Get-MetricTotal -Text $metricsAfter -Name "albion_receiver_entries_received_total") - $entriesBefore
     batches_sent_delta = (Get-MetricTotal -Text $metricsAfter -Name "albion_receiver_forwarder_batches_sent_total") - $batchesBefore
