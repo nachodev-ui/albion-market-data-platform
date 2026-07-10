@@ -16,7 +16,6 @@ data/**/*.json
 .env
 .env.*
 !.env.example
-!.env.production.example
 
 # Node and documentation
 node_modules/
