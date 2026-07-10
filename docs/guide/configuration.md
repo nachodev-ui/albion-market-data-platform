@@ -1,9 +1,9 @@
 # Configuración
 
-La configuración activa vive en `.env`. El repositorio contiene dos plantillas:
+La configuración activa vive en `.env`. El repositorio contiene dos referencias:
 
 - `.env.example`: desarrollo local con API central en `127.0.0.1:8080`;
-- `.env.production.example`: receiver local conectado a la API pública de Render.
+- `docs/examples/render-production.env.example`: receiver local conectado a la API pública de Render.
 
 Los archivos `.env`, `secrets/`, `*.token` y `*.secret` están ignorados por Git.
 
