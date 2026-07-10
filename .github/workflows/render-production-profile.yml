@@ -1,0 +1,171 @@
+name: Render production profile
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - docs/examples/render-production.env.example
+      - .gitignore
+      - scripts/configure-render-production.ps1
+      - scripts/verify-render-pipeline.ps1
+      - scripts/receiver.ps1
+      - .github/workflows/render-production-profile.yml
+      - docs/guide/central-api.md
+      - docs/guide/configuration.md
+      - docs/guide/albion-data-client.md
+      - docs/operations/diagnostics.md
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - docs/examples/render-production.env.example
+      - .gitignore
+      - scripts/configure-render-production.ps1
+      - scripts/verify-render-pipeline.ps1
+      - scripts/receiver.ps1
+      - .github/workflows/render-production-profile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Render production profile
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Parse PowerShell scripts
+        run: |
+          $scripts = @(
+              "scripts/configure-render-production.ps1",
+              "scripts/verify-render-pipeline.ps1",
+              "scripts/receiver.ps1"
+          )
+
+          $allErrors = [System.Collections.Generic.List[object]]::new()
+          foreach ($script in $scripts) {
+              $tokens = $null
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  (Resolve-Path $script),
+                  [ref]$tokens,
+                  [ref]$errors
+              ) | Out-Null
+
+              foreach ($error in @($errors)) {
+                  $allErrors.Add([pscustomobject]@{
+                      script = $script
+                      message = $error.Message
+                      line = $error.Extent.StartLineNumber
+                      column = $error.Extent.StartColumnNumber
+                  })
+              }
+          }
+
+          if ($allErrors.Count -gt 0) {
+              $allErrors | Format-Table -AutoSize | Out-String | Write-Host
+              throw "Se encontraron errores de sintaxis PowerShell."
+          }
+
+      - name: Validate production template
+        run: |
+          $templatePath = "docs/examples/render-production.env.example"
+          $template = Get-Content $templatePath -Raw
+          $required = @(
+              "APP_ENV=production",
+              "LOAD_DOTENV=true",
+              "COLLECTOR_LISTEN=127.0.0.1:8787",
+              "COLLECTOR_ALLOW_REMOTE=false",
+              "UPSTREAM_ENABLED=true",
+              "UPSTREAM_HISTORY_ENABLED=true",
+              "UPSTREAM_BASE_URL=https://albion-market-api.onrender.com",
+              "UPSTREAM_TOKEN=",
+              "UPSTREAM_TOKEN_FILE=./secrets/upstream-current.token",
+              "UPSTREAM_REQUIRE_HTTPS=true"
+          )
+
+          foreach ($entry in $required) {
+              if (-not $template.Contains($entry)) {
+                  throw "Falta '$entry' en $templatePath."
+              }
+          }
+
+          if ($template -match '(?m)^UPSTREAM_TOKEN=.+$') {
+              throw "La plantilla no puede contener un token inline."
+          }
+          if ($template.Contains("albion-market-api-nachodev.fly.dev")) {
+              throw "La plantilla contiene el host obsoleto de Fly.io."
+          }
+
+      - name: Exercise production configurator
+        run: |
+          $runtime = Join-Path $env:RUNNER_TEMP "render-profile"
+          $environmentPath = Join-Path $runtime ".env"
+          $tokenPath = Join-Path $runtime "ingest-current.token"
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+
+          $fakeToken = "0123456789abcdef0123456789abcdef"
+          [System.IO.File]::WriteAllText(
+              $tokenPath,
+              $fakeToken,
+              [System.Text.UTF8Encoding]::new($false)
+          )
+
+          .\scripts\configure-render-production.ps1 `
+              -EnvironmentPath $environmentPath `
+              -TokenSourcePath $tokenPath `
+              -SkipApiCheck `
+              -NoBackup | Out-Host
+
+          $values = @{}
+          foreach ($line in Get-Content $environmentPath) {
+              if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith("#")) {
+                  continue
+              }
+              $separator = $line.IndexOf("=")
+              if ($separator -lt 1) {
+                  continue
+              }
+              $name = $line.Substring(0, $separator).Trim()
+              $value = $line.Substring($separator + 1)
+              $values[$name] = $value
+          }
+
+          $assertions = @{
+              "APP_ENV" = "production"
+              "LOAD_DOTENV" = "true"
+              "UPSTREAM_BASE_URL" = "https://albion-market-api.onrender.com"
+              "UPSTREAM_TOKEN" = ""
+              "UPSTREAM_TOKEN_FILE" = "./secrets/upstream-current.token"
+              "UPSTREAM_REQUIRE_HTTPS" = "true"
+          }
+
+          foreach ($entry in $assertions.GetEnumerator()) {
+              if (-not $values.ContainsKey($entry.Key)) {
+                  throw "El configurador no produjo la clave $($entry.Key)."
+              }
+              if ([string]$values[$entry.Key] -cne [string]$entry.Value) {
+                  throw "Valor inesperado para $($entry.Key)."
+              }
+          }
+
+          $storedTokenPath = Join-Path $PWD "secrets\upstream-current.token"
+          if (-not (Test-Path -LiteralPath $storedTokenPath -PathType Leaf)) {
+              throw "El configurador no creó el archivo de token esperado."
+          }
+          $storedToken = [System.IO.File]::ReadAllText($storedTokenPath)
+          if ($storedToken -ne $fakeToken) {
+              throw "El token se modificó o recibió un salto final."
+          }
+
+          Remove-Item -LiteralPath "secrets" -Recurse -Force
