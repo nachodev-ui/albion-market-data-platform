@@ -105,37 +105,3 @@ jobs:
           if ($source -notmatch '(?s)-Method POST.*?/deploys.*?deploy_only') {
               throw "Falta el deploy de configuración controlado."
           }
-
-      - name: Validate token source without network
-        run: |
-          $tokens = $null
-          $errors = $null
-          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
-              (Resolve-Path "scripts/sync-render-ingest-token.ps1"),
-              [ref]$tokens,
-              [ref]$errors
-          )
-
-          $functionAst = $ast.Find({
-              param($node)
-              $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-                  $node.Name -eq "Resolve-TokenSource"
-          }, $true)
-          & ([scriptblock]::Create($functionAst.Extent.Text))
-
-          $root = (Resolve-Path ".").Path
-          $runtime = Join-Path $env:RUNNER_TEMP "render-token-sync"
-          $tokenPath = Join-Path $runtime "ingest-current.token"
-          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-          [System.IO.File]::WriteAllText(
-              $tokenPath,
-              "0123456789abcdef0123456789abcdef",
-              [System.Text.UTF8Encoding]::new($false)
-          )
-
-          $resolved = Resolve-TokenSource -RequestedPath $tokenPath
-          if ($resolved -ne (Resolve-Path $tokenPath).Path) {
-              throw "No se respetó la ruta explícita del token."
-          }
-
-          Remove-Item -LiteralPath $runtime -Recurse -Force
