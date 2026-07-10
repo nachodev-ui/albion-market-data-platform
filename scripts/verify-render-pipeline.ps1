@@ -104,7 +104,8 @@ function Get-MetricTotal {
 function Get-ApiIngestCounters {
     param([Parameter(Mandatory)] $Value)
 
-    $matches = [System.Collections.Generic.List[object]]::new()
+    $ingestCounters = [System.Collections.Generic.List[object]]::new()
+    $counterPattern = '(?i)(ingest|history).*(received|accepted|stored|touched|request|batch|entr|row)'
 
     function Visit-Value {
         param(
@@ -148,8 +149,8 @@ function Get-ApiIngestCounters {
                 $propertyValue -is [single] -or
                 $propertyValue -is [double] -or
                 $propertyValue -is [decimal]) {
-                if ($propertyPath -match '(?i)(ingest|history).*(received|accepted|stored|touched|request|batch|entr|row)') {
-                    $matches.Add([pscustomobject]@{
+                if ([regex]::IsMatch($propertyPath, $counterPattern)) {
+                    [void]$ingestCounters.Add([pscustomobject]@{
                         path = $propertyPath
                         value = [double]$propertyValue
                     })
@@ -162,7 +163,7 @@ function Get-ApiIngestCounters {
     }
 
     Visit-Value -Current $Value -Path ""
-    return @($matches)
+    return @($ingestCounters)
 }
 
 function Get-CounterSum {
