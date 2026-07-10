@@ -59,7 +59,8 @@ UPSTREAM_MAX_RETRY_DELAY=5m
 UPSTREAM_TIMEOUT=30s
 ```
 
-El archivo `.env.production.example` contiene el perfil completo sin secretos.
+El archivo `docs/examples/render-production.env.example` contiene el perfil
+completo sin secretos y se incluye en la distribución nativa.
 
 ## Comprobación rápida
 
