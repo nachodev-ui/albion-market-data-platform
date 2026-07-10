@@ -6,13 +6,12 @@ on:
       - develop
       - main
     paths:
-      - .env.production.example
+      - docs/examples/render-production.env.example
       - .gitignore
       - scripts/configure-render-production.ps1
       - scripts/verify-render-pipeline.ps1
       - scripts/receiver.ps1
       - .github/workflows/render-production-profile.yml
-      - .github/workflows/release-distribution.yml
       - docs/guide/central-api.md
       - docs/guide/configuration.md
       - docs/guide/albion-data-client.md
@@ -22,13 +21,12 @@ on:
       - develop
       - main
     paths:
-      - .env.production.example
+      - docs/examples/render-production.env.example
       - .gitignore
       - scripts/configure-render-production.ps1
       - scripts/verify-render-pipeline.ps1
       - scripts/receiver.ps1
       - .github/workflows/render-production-profile.yml
-      - .github/workflows/release-distribution.yml
   workflow_dispatch:
 
 permissions:
@@ -81,7 +79,8 @@ jobs:
 
       - name: Validate production template
         run: |
-          $template = Get-Content .env.production.example -Raw
+          $templatePath = "docs/examples/render-production.env.example"
+          $template = Get-Content $templatePath -Raw
           $required = @(
               "APP_ENV=production",
               "LOAD_DOTENV=true",
@@ -97,7 +96,7 @@ jobs:
 
           foreach ($entry in $required) {
               if (-not $template.Contains($entry)) {
-                  throw "Falta '$entry' en .env.production.example."
+                  throw "Falta '$entry' en $templatePath."
               }
           }
 
