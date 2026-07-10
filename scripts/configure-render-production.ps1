@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$templatePath = Join-Path $root "config\render-production.env.example"
+$templatePath = Join-Path $root "docs\examples\render-production.env.example"
 $tokenDestinationPath = Join-Path $root "secrets\upstream-current.token"
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
