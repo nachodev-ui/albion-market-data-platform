@@ -1,289 +1,213 @@
+<div align="center">
+
 # Albion Market Data Platform
 
-Servicio local en Go para capturar los paquetes de mercado enviados por Albion
-Data Client, conservarlos como auditoría, normalizarlos y servirlos a la
-calculadora React sin consultar directamente la API pública de AODP.
+**Receiver local, normalización y entrega confiable de datos de mercado para Albion Online.**
 
-## Documentación operativa
+[Documentación](https://nachodev-ui.github.io/albion-market-data-platform/) · [Releases](https://github.com/nachodev-ui/albion-market-data-platform/releases) · [API central](https://albion-market-api.onrender.com)
 
-La documentación completa de instalación, configuración, operación,
-recuperación, releases y mantenimiento vive en `docs/` y se publica con
-VitePress mediante GitHub Pages.
+</div>
 
-Consulta especialmente:
+---
 
-- `docs/guide/installation.md`
-- `docs/guide/configuration.md`
-- `docs/operations/index.md`
-- `docs/recovery/backup-restore.md`
-- `docs/release/index.md`
-- `docs/testing/index.md`
+Albion Market Data Platform recibe paquetes desde Albion Data Client, conserva evidencia local, normaliza precios e historial y los entrega a la API central mediante una outbox persistente. Está orientado a colaboradores y máquinas recolectoras; los usuarios de la aplicación web no necesitan instalarlo.
+
+> [!NOTE]
+> Este repositorio es la capa de captura de la plataforma. El frontend público consume datos desde `albion-market-api` y funciona independientemente del receiver local.
+
+## Papel dentro de la plataforma
+
+| Área | Responsabilidad |
+|---|---|
+| Captura | Recibir órdenes e historial desde Albion Data Client |
+| Normalización | Convertir IDs, precios, timestamps, mercados y calidad a un modelo estable |
+| Persistencia local | Conservar raw, JSONL normalizado y una proyección de consulta |
+| Entrega | Reenviar precios e historial a la API central con autenticación |
+| Recuperación | Mantener outbox durable, reintentos, reinicio seguro y dead-letter |
+| Diagnóstico | Exponer API local, métricas Prometheus y estado detallado |
+
+## Arquitectura del pipeline
+
+```mermaid
+flowchart LR
+    ADC[Albion Data Client]
+    Receiver[Receiver local\n127.0.0.1:8787]
+    Raw[(data/raw)]
+    Normalized[(data/normalized)]
+    LocalDB[(market-state.json)]
+    Outbox[(Outbox persistente)]
+    API[albion-market-api\nRender]
+    Neon[(Neon PostgreSQL)]
+    LocalAPI[API local de consulta]
+
+    ADC -->|órdenes e historial| Receiver
+    Receiver --> Raw
+    Receiver --> Normalized
+    Receiver --> LocalDB
+    Receiver --> Outbox
+    Receiver --> LocalAPI
+    Outbox -->|HTTPS + Bearer| API
+    API --> Neon
+```
+
+## Garantías operativas
+
+### Persistencia antes de entrega
+
+Cada captura aceptada se conserva localmente antes de considerarse lista para reenvío. La API central puede estar temporalmente caída sin perder los batches pendientes.
+
+### Recuperación automática
+
+```mermaid
+flowchart LR
+    Capture[Captura normalizada]
+    Persist[Escritura durable]
+    Pending[Pending]
+    Send[Intento de entrega]
+    Success[Confirmado]
+    Retry[Backoff y reintento]
+    DLQ[Dead-letter]
+
+    Capture --> Persist --> Pending --> Send
+    Send -->|2xx| Success
+    Send -->|error transitorio| Retry --> Pending
+    Send -->|error permanente o límite agotado| DLQ
+```
+
+El mismo `request_id` se conserva durante reintentos y recuperación, permitiendo que la API central aplique idempotencia sin duplicar información.
+
+### Separación de forwarders
+
+Precios e historial mantienen estado y métricas independientes. Esto permite detectar si una corriente está saludable aunque la otra esté degradada.
 
 ## Inicio rápido recomendado
 
-Desde la raíz de `albion-market-data-platform`:
+### Requisitos
+
+- Windows con PowerShell;
+- Albion Data Client;
+- Go 1.23 o posterior para desarrollo desde código fuente.
+
+La distribución nativa publicada en GitHub Releases no requiere Go para ejecutar el receiver.
+
+### Sesión completa de desarrollo
+
+Desde la raíz del repositorio:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\start-session.ps1
 ```
 
-Este script inicia en cadena:
+El script puede iniciar en cadena:
 
-1. La API central en `127.0.0.1:8080`, si todavía no está activa.
-2. El receptor local en `127.0.0.1:8787`.
-3. Albion Data Client conectado a AODP y al receptor local.
-4. La calculadora React mediante `pnpm dev`.
+1. la API central local en `127.0.0.1:8080`;
+2. el receiver en `127.0.0.1:8787`;
+3. Albion Data Client con el receiver como destino;
+4. la calculadora React mediante `pnpm dev`.
 
-### Flujo diario
-
-```text
-1. Ejecutar start-session.ps1
-2. Abrir o iniciar sesión en Albion Online
-3. Cambiar de zona si Albion Data Client aún no detectó la ubicación
-4. Visitar los mercados y objetos necesarios
-5. Revisar ofertas de venta y órdenes de compra
-6. Pulsar “Actualizar precios” en la calculadora
-```
-
-No es necesario ejecutar `reprocess.ps1 -Rebuild` después de visitar mercados.
-Las capturas nuevas actualizan automáticamente:
-
-```text
-data/raw
-data/normalized
-data/database/market-state.json
-```
-
-## Scripts sin firma
-
-Cuando Windows bloquee un archivo `.ps1`, ejecuta primero:
+### Receiver solamente
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-Luego ejecuta el script en un comando separado:
-
-```powershell
-.\scripts\verify-api.ps1
-```
-
-La excepción solo afecta a la consola actual y desaparece al cerrarla.
-
-También puedes desbloquear una vez todos los archivos:
-
-```powershell
-Get-ChildItem . -Recurse -File | Unblock-File
-```
-
-## Cuándo usar una reconstrucción completa
-
-Detén primero el receptor con `Ctrl + C` y ejecuta:
-
-```powershell
-.\scripts\reprocess.ps1 -Rebuild
-```
-
-Úsalo únicamente cuando:
-
-* cambia `catalog/markets.json`;
-* cambia `catalog/items.txt`;
-* se modifica la normalización;
-* se corrige una asociación de ubicación;
-* se actualiza el formato de los datos;
-* es necesario recuperar la base desde `data/raw`.
-
-Después vuelve a iniciar:
-
-```powershell
+.\scripts\check.ps1
+.\scripts\rebuild-database.ps1
 .\scripts\receiver.ps1
 ```
 
-## Requisitos
-
-- Go 1.23 o posterior para desarrollo desde código fuente.
-- PowerShell en Windows.
-- Albion Data Client.
-
-La distribución nativa Windows publicada en GitHub Releases no requiere Go para ejecutar el receiver.
-
-## Primera ejecución
-
-Desde la raíz del proyecto:
-
-```powershell
-./scripts/check.ps1
-./scripts/rebuild-database.ps1
-./scripts/receiver.ps1
-```
-
-El receptor queda disponible en `http://127.0.0.1:8787`.
-
-En otra consola inicia Albion Data Client con el receptor local como segundo
-destino:
+En otra consola, inicia Albion Data Client con ambos destinos:
 
 ```powershell
 & "C:\Program Files\Albion Data Client\albiondata-client.exe" `
   -i "https+pow://albion-online-data.com,http://127.0.0.1:8787"
 ```
 
-La consola del receptor y la de Albion Data Client deben permanecer abiertas
-mientras capturas mercados. Se detienen con `Ctrl + C`; los datos guardados no
-se eliminan.
+Las consolas deben permanecer abiertas durante la captura. `Ctrl + C` detiene los procesos sin eliminar los datos guardados.
 
-## API local
-
-| Endpoint | Uso |
-|---|---|
-| `GET /healthz` | Estado básico del receptor |
-| `GET /metrics` | Métricas Prometheus del receiver, almacenamiento, outbox y forwarders |
-| `GET /api/v1/status` | Estado del receptor, repositorio y forwarders separados de precios e historial |
-| `GET /api/v1/markets` | Catálogo canónico de mercados habilitados |
-| `GET /api/v1/prices` | Precio de venta mínimo y compra máxima para varios objetos |
-| `GET /api/v1/history` | Historial normalizado de 7 días o 4 semanas |
-| `GET /api/v1/orders` | Última versión conocida de las órdenes capturadas |
-
-Ejemplo batch utilizado por la calculadora:
+## Operación diaria
 
 ```text
-/api/v1/prices?server=west&marketKey=brecilien&itemIds=T4_MAIN_CURSEDSTAFF_CRYSTAL%404,T5_MAIN_CURSEDSTAFF_CRYSTAL%404&quality=4
+1. Iniciar el receiver o ejecutar start-session.ps1
+2. Abrir Albion Online
+3. Cambiar de zona para confirmar detección de ubicación
+4. Visitar los mercados y objetos necesarios
+5. Revisar ofertas de venta y órdenes de compra
+6. Consultar el estado local o actualizar la calculadora
 ```
 
-Ejemplo de historial:
+Las capturas nuevas actualizan automáticamente:
 
 ```text
-/api/v1/history?server=west&marketKey=brecilien&itemId=T4_MAIN_CURSEDSTAFF_CRYSTAL%404&quality=4&period=4-weeks&limit=1
-```
-
-Puedes validar una captura incluida con:
-
-```powershell
-./scripts/verify-api.ps1
-```
-
-## Prueba end-to-end formal
-
-La validación integrada de receiver, outbox, API central, PostgreSQL y frontend
-se ejecuta con una base dedicada:
-
-```powershell
-.\scripts\e2e-three-projects.ps1 `
-  -DatabaseUrl "postgres://postgres:TU_CLAVE@localhost:5432/albion_market_e2e?sslmode=disable"
-```
-
-El arnés usa puertos aislados, prueba fallbacks, idempotencia, corrección de
-buckets, recuperación de outbox y dead-letter, y genera evidencia en
-`.e2e/artifacts`. Consulta `docs/E2E_TRES_PROYECTOS.md`.
-
-## Observabilidad del receiver y forwarder
-
-La consola usa eventos estructurados y niveles visuales:
-
-```text
-[OK   ] ingest.orders_completed received=50 stored=50 duplicates=0 forwarded=12 dropped=0
-[OK   ] ingest.history_completed item_key="..." buckets=68 forwarded=1 forwarded_buckets=68 dropped=0
-[RETRY] upstream.retry_scheduled request_id="..." attempt=1 next_attempt=2 http_status=503 retry_in_ms=500
-[RETRY] upstream.history_retry_scheduled request_id="..." attempt=1 next_attempt=2 buckets=68 http_status=503
-[OK   ] upstream.history_batch_recovered request_id="..." entries=1 buckets=68 attempts=2
-[DROP ] upstream.history_queue_drop reason="outbox_full" dropped_total=1 item_key="..." buckets=68
-[RETRY] upstream.history_batch_persisted_for_retry request_id="..." attempts_total=3
-[DROP ] upstream.history_batch_dead_lettered request_id="..." attempts_total=12
-```
-
-Los colores se controlan con `LOG_COLOR=auto`, `always` o `never`. En Windows,
-el modo `auto` habilita Virtual Terminal Processing cuando la consola lo admite;
-si no lo admite, muestra etiquetas limpias sin imprimir secuencias ANSI.
-
-`GET /api/v1/status` incluye:
-
-- tiempo activo del servicio;
-- cantidad de snapshots del repositorio local;
-- `price_forwarder` y `history_forwarder` por separado;
-- profundidad, capacidad y máximo observado de cada outbox;
-- pendientes, batches en retry, batches en procesamiento y dead-letter;
-- antigüedad del pendiente más antiguo;
-- batches, capturas, entradas y buckets enviados;
-- reintentos, recuperaciones, reprogramaciones y dead-letter;
-- latencia del último batch, promedio y máxima;
-- último envío exitoso y último error upstream.
-
-`forwarder` se conserva como alias de `price_forwarder` para compatibilidad.
-
-Consulta rápida:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8787/api/v1/status |
-    ConvertTo-Json -Depth 10
-```
-
-La documentación detallada está en `docs/OBSERVABILIDAD.md` y `docs/FORWARDER_HISTORICO.md`.
-
-Las métricas Prometheus se consultan sin inspeccionar archivos locales:
-
-```powershell
-Invoke-WebRequest http://127.0.0.1:8787/metrics |
-    Select-Object -ExpandProperty Content
-```
-
-El endpoint incluye contadores de capturas, entradas, almacenados, duplicados,
-errores de normalización y almacenamiento; estado de outbox y forwarders;
-latencias; bytes por área; uptime y metadatos del build.
-
-## Forwarder histórico central
-
-Las capturas `markethistories.ingest` se guardan primero en el receiver y luego
-se encolan hacia:
-
-```http
-POST http://127.0.0.1:8080/api/v1/ingest/history
-```
-
-Configuración mínima:
-
-```env
-UPSTREAM_ENABLED=true
-UPSTREAM_HISTORY_ENABLED=true
-UPSTREAM_BASE_URL=http://127.0.0.1:8080
-UPSTREAM_TOKEN=
-UPSTREAM_TOKEN_FILE=./secrets/upstream-current.token
-UPSTREAM_MIN_TOKEN_LENGTH=32
-```
-
-Prueba end-to-end:
-
-```powershell
-.\scripts\verify-history-forwarder.ps1
-```
-
-La guía completa está en `docs/FORWARDER_HISTORICO.md`. La generación y
-rotación segura de la credencial se documenta en `docs/SEGURIDAD_SECRETOS.md`.
-
-## Outbox persistente y recuperación
-
-Los forwarders de precios e historial comparten una outbox durable en:
-
-```text
+data/raw
+data/normalized
+data/database/market-state.json
 data/outbox/state.json
 ```
 
-Cada captura se escribe en disco antes de considerarse encolada. Si la API
-central está caída, el receiver se cierra o Windows se reinicia, los batches
-pendientes se recuperan automáticamente con el mismo `request_id`.
+No es necesario ejecutar una reconstrucción completa después de una sesión normal.
 
-Configuración recomendada:
+## Configuración del upstream
 
-```env
+Configuración mínima para entregar datos a la API central:
+
+```dotenv
+UPSTREAM_ENABLED=true
+UPSTREAM_HISTORY_ENABLED=true
+UPSTREAM_BASE_URL=https://albion-market-api.onrender.com
+UPSTREAM_TOKEN=
+UPSTREAM_TOKEN_FILE=./secrets/upstream-current.token
+UPSTREAM_MIN_TOKEN_LENGTH=32
 UPSTREAM_OUTBOX_PATH=./data/outbox/state.json
 UPSTREAM_MAX_DELIVERY_ATTEMPTS=12
 UPSTREAM_MAX_RETRY_DELAY=5m
 ```
 
-Errores transitorios se reprograman con backoff. Errores permanentes, o batches
-que agotan el máximo acumulado, terminan en `dead_letter` y nunca desaparecen
-silenciosamente.
+> [!IMPORTANT]
+> Usa el archivo de token o la variable, nunca ambos. No confirmes credenciales, archivos `.env.local` ni contenido de `secrets/`.
 
-Consulta y operación manual:
+La configuración completa está en [Guía de configuración](https://nachodev-ui.github.io/albion-market-data-platform/guide/configuration).
+
+## API local
+
+| Método y ruta | Propósito |
+|---|---|
+| `GET /healthz` | Estado básico del receiver |
+| `GET /metrics` | Métricas Prometheus de captura, almacenamiento y forwarders |
+| `GET /api/v1/status` | Estado operativo, outbox, reintentos y dead-letter |
+| `GET /api/v1/markets` | Catálogo canónico de mercados |
+| `GET /api/v1/prices` | Precio mínimo de venta y máximo de compra |
+| `GET /api/v1/history` | Historial normalizado de 7 días o 4 semanas |
+| `GET /api/v1/orders` | Última versión conocida de las órdenes capturadas |
+
+Ejemplo de precios:
+
+```text
+http://127.0.0.1:8787/api/v1/prices?server=west&marketKey=brecilien&itemIds=T4_MAIN_CURSEDSTAFF_CRYSTAL%404&quality=4
+```
+
+Ejemplo de historial:
+
+```text
+http://127.0.0.1:8787/api/v1/history?server=west&marketKey=brecilien&itemId=T4_MAIN_CURSEDSTAFF_CRYSTAL%404&quality=4&period=4-weeks
+```
+
+Validación rápida:
+
+```powershell
+.\scripts\verify-api.ps1
+
+Invoke-RestMethod http://127.0.0.1:8787/api/v1/status |
+    ConvertTo-Json -Depth 10
+```
+
+## Outbox y dead-letter
+
+La outbox durable vive en:
+
+```text
+data/outbox/state.json
+```
+
+Operaciones disponibles:
 
 ```powershell
 .\scripts\outbox-dead-letter.ps1 -Action list
@@ -291,121 +215,151 @@ Consulta y operación manual:
 .\scripts\outbox-dead-letter.ps1 -Action purge -RequestId <UUID>
 ```
 
-Para validar una caída, reinicio y recuperación:
+Prueba formal de caída, reinicio y recuperación:
 
 ```powershell
 .\scripts\verify-outbox-recovery.ps1
 ```
 
-La documentación detallada está en `docs/OUTBOX_Y_BACKFILL.md`.
+Consulta [Outbox y backfill](https://nachodev-ui.github.io/albion-market-data-platform/OUTBOX_Y_BACKFILL) antes de purgar o reencolar elementos.
 
 ## Backfill histórico
 
-Primero revisa lo que se enviará durante los últimos 28 días:
+Revisa primero el contenido que se enviará:
 
 ```powershell
 .\scripts\backfill-history.ps1 -DryRun
 ```
 
-Después realiza el envío:
+Envía los últimos 28 días:
 
 ```powershell
 .\scripts\backfill-history.ps1
 ```
 
-Para cargar todo el historial normalizado disponible:
+Para todo el historial normalizado disponible:
 
 ```powershell
 .\scripts\backfill-history.ps1 -All -DryRun
 .\scripts\backfill-history.ps1 -All
 ```
 
-El comando produce `request_id` deterministas según el contenido de cada batch.
-Repetir exactamente el mismo backfill devuelve batches duplicados desde la API
-central, sin duplicar buckets en `market_history_buckets`.
+Los `request_id` son deterministas por contenido; repetir el mismo backfill no duplica buckets en la API central.
 
-## Persistencia
+## Reconstrucción y recuperación local
 
-`data/database/market-state.json` es una proyección local versionada y escrita
-de forma atómica. Contiene snapshots históricos y de órdenes deduplicados.
-
-Para reconstruirla desde `data/normalized/`:
+Una reconstrucción completa se reserva para cambios de catálogo, reglas de normalización, asociaciones de ubicación o formatos persistidos.
 
 ```powershell
-./scripts/rebuild-database.ps1
+# Detener primero el receiver con Ctrl + C
+.\scripts\reprocess.ps1 -Rebuild
+.\scripts\receiver.ps1
 ```
 
-Para volver a normalizar `data/raw/` y sincronizar después la base local:
+Para reconstruir solo la proyección desde los normalizados:
 
 ```powershell
-./scripts/reprocess.ps1
+.\scripts\rebuild-database.ps1
 ```
 
-Modificar `catalog/items.txt`, `catalog/markets.json` o las reglas de
-normalización requiere una reconstrucción completa:
+Guías relacionadas:
+
+- [Backup y restauración](https://nachodev-ui.github.io/albion-market-data-platform/recovery/backup-restore)
+- [Reconstrucción](https://nachodev-ui.github.io/albion-market-data-platform/recovery/rebuild)
+- [Runbook degradado](https://nachodev-ui.github.io/albion-market-data-platform/RUNBOOK_RECEIVER_DEGRADED)
+
+## Prueba end-to-end de los tres proyectos
+
+El arnés formal valida receiver, outbox, API central, PostgreSQL y frontend usando puertos y base de datos aislados:
 
 ```powershell
-./scripts/reprocess.ps1 -Rebuild
+.\scripts\e2e-three-projects.ps1 `
+  -DatabaseUrl "postgres://postgres:TU_CLAVE@localhost:5432/albion_market_e2e?sslmode=disable"
 ```
 
-El script aparta los normalizados anteriores en una carpeta con timestamp,
-regenera los JSONL desde `data/raw/` y reconstruye la base local.
+La prueba cubre:
 
-## Carpetas
+- ingesta de precios e historial;
+- idempotencia;
+- corrección de buckets;
+- fallbacks del frontend;
+- recuperación tras reinicio;
+- dead-letter y requeue;
+- evidencia reproducible en `.e2e/artifacts`.
+
+Documentación: [E2E de los tres proyectos](https://nachodev-ui.github.io/albion-market-data-platform/E2E_TRES_PROYECTOS).
+
+## Estructura del repositorio
 
 ```text
-apps/collector/
-├─ cmd/receiver/       receptor, normalización y API
-├─ cmd/reprocess/      reconstrucción desde datos crudos
-├─ cmd/rebuilddb/      reconstrucción de la proyección persistente
-├─ cmd/backfillhistory/ backfill idempotente a la API central
-├─ cmd/outboxctl/      inspección y recuperación de dead-letter
-└─ internal/
-   ├─ httpapi/
-   ├─ httpingest/
-   ├─ normalization/
-   ├─ observability/  logs estructurados y colores multiplataforma
-   ├─ upstream/       outbox persistente, reintentos y métricas
-   └─ storage/
-      ├─ localdb/      base local persistente
-      ├─ composite/    escritura JSONL + base local
-      └─ ...
-
-catalog/
-├─ items.txt
-└─ markets.json
-
-data/
-├─ raw/
-├─ normalized/
-├─ database/
-├─ outbox/
-└─ test/
+.
+├─ apps/collector/
+│  ├─ cmd/receiver/          proceso principal
+│  ├─ cmd/reprocess/         normalización desde raw
+│  ├─ cmd/rebuilddb/         reconstrucción de la proyección
+│  ├─ cmd/backfillhistory/   backfill idempotente
+│  ├─ cmd/outboxctl/         operación de dead-letter
+│  └─ internal/
+│     ├─ httpapi/            API local
+│     ├─ httpingest/         recepción desde Albion Data Client
+│     ├─ normalization/      transformación de paquetes
+│     ├─ observability/      logs y métricas
+│     ├─ upstream/           outbox, reintentos y forwarders
+│     └─ storage/            raw, JSONL y proyección local
+├─ catalog/
+│  ├─ items.txt
+│  └─ markets.json
+├─ data/
+│  ├─ raw/
+│  ├─ normalized/
+│  ├─ database/
+│  ├─ outbox/
+│  └─ test/
+├─ docs/                    portal VitePress
+└─ scripts/                 operación y validación en Windows
 ```
 
 ## Normalización
 
-- `AlbionId` se resuelve a identificador de objeto.
-- Plata de paquetes reales se divide por `10.000`.
-- Ticks de .NET se convierten a UTC.
-- Ubicación y calidad reciben dimensiones legibles.
-- Órdenes e historiales se deduplican por snapshot.
-- Una orden que cambia conserva una versión nueva.
-- Las órdenes expiradas no participan en `/prices`.
+- resolución de `AlbionId` a identificadores estables;
+- conversión de valores monetarios desde paquetes reales;
+- conversión de ticks .NET a UTC;
+- asignación canónica de mercado y calidad;
+- deduplicación de snapshots de órdenes e historial;
+- exclusión de órdenes expiradas en consultas de precios;
+- conservación de ubicaciones desconocidas sin mezclarlas con mercados verificados.
 
-`catalog/markets.json` contiene los siete mercados regulares verificados y sus
-identificadores exactos. La API y React utilizan claves estables (`marketKey`).
-Una ubicación desconocida se conserva por ID, pero no se mezcla con una ciudad
-hasta incorporarla explícitamente al catálogo.
-
-## Pruebas aisladas
+## Calidad y observabilidad
 
 ```powershell
-# Terminal 1
-./scripts/receiver-test.ps1
-
-# Terminal 2
-./scripts/test-receiver.ps1
+.\scripts\check.ps1
+.\scripts\verify-api.ps1
+.\scripts\verify-history-forwarder.ps1
+.\scripts\verify-outbox-recovery.ps1
 ```
 
-La prueba usa el puerto `8788` y escribe únicamente dentro de `data/test/`.
+`/metrics` expone contadores, latencias, profundidad de outbox, estado de forwarders, bytes persistidos, uptime y metadatos del build. `/api/v1/status` entrega una vista detallada para diagnóstico humano.
+
+## Documentación
+
+El portal operativo se publica en [GitHub Pages](https://nachodev-ui.github.io/albion-market-data-platform/).
+
+| Tema | Enlace |
+|---|---|
+| Instalación | [Guía inicial](https://nachodev-ui.github.io/albion-market-data-platform/guide/installation) |
+| Albion Data Client | [Configuración del cliente](https://nachodev-ui.github.io/albion-market-data-platform/guide/albion-data-client) |
+| Operación | [Inicio, detención y diagnóstico](https://nachodev-ui.github.io/albion-market-data-platform/operations/) |
+| Recuperación | [Backup, rebuild y limpieza](https://nachodev-ui.github.io/albion-market-data-platform/recovery/) |
+| Seguridad | [Secretos y rotación](https://nachodev-ui.github.io/albion-market-data-platform/SEGURIDAD_SECRETOS) |
+| Releases | [Actualización y rollback](https://nachodev-ui.github.io/albion-market-data-platform/release/) |
+
+## Repositorios relacionados
+
+| Repositorio | Función |
+|---|---|
+| [`albion-market-api`](https://github.com/nachodev-ui/albion-market-api) | API central y persistencia PostgreSQL |
+| [`albion-production-calculator`](https://github.com/nachodev-ui/albion-production-calculator) | Frontend público de cálculo y análisis |
+
+## Estado del proyecto
+
+El receiver y sus mecanismos de recuperación están completos para el alcance actual. La fase operativa se centra en ejecución prolongada, revisión de dead-letter, backup y restauración, y publicación de releases estables.
