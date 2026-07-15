@@ -160,10 +160,26 @@ func (c *Catalog) Location(id string) domain.LocationDimension {
 // Albion Data Client can temporarily alternate between both IDs while the
 // player enters a marketplace. Market orders and histories captured during
 // that transition must still be queryable through the public marketKey.
+//
+// The Black Market is the exception: it has no separate marketplace ID and ADC
+// reports Caerleon's city location (3003), while the regular Caerleon market is
+// reported as 3005. Resolve that explicit catalog entry before applying regular
+// city aliases so Black Market buy orders are never relabeled as Caerleon.
 func (c *Catalog) CanonicalMarketLocation(id string) domain.LocationDimension {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return domain.LocationDimension{}
+	}
+
+	for index := range c.markets {
+		market := &c.markets[index]
+		if market.Type == "black-market" && id == market.CityLocationID {
+			return domain.LocationDimension{
+				ID:        id,
+				Name:      market.Name,
+				MarketKey: market.Key,
+			}
+		}
 	}
 
 	var matched *domain.MarketDefinition
