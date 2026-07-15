@@ -209,8 +209,8 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
-      - name: Create release tag
-        if: steps.meta.outputs.tag != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment')
+      - name: Validate release tag target
+        if: steps.meta.outputs.tag != ''
         run: |
           $tag = "${{ steps.meta.outputs.tag }}"
           $head = (git rev-parse HEAD).Trim()
@@ -224,10 +224,7 @@ jobs:
               }
               Write-Host "Tag $tag already points to the current commit."
           } else {
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git tag --annotate $tag --message "Release $tag"
-              git push origin "refs/tags/$tag"
+              Write-Host "Tag $tag will be created atomically with the GitHub Release."
           }
 
       - name: Attest build provenance
@@ -292,5 +289,5 @@ jobs:
               gh release upload $tag @assets --clobber
               gh release edit $tag --title $tag --notes-file $notes
           } else {
-              gh release create $tag @assets --title $tag --notes-file $notes --verify-tag
+              gh release create $tag @assets --target "${{ steps.meta.outputs.commit }}" --title $tag --notes-file $notes
           }
