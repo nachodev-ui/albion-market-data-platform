@@ -12,10 +12,15 @@ on:
       - scripts/**
       - .env.example
       - .github/workflows/release-distribution.yml
+      - release/**
   push:
+    branches:
+      - main
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
+    paths:
+      - release/VERSION
 
 permissions:
   contents: write
@@ -56,6 +61,16 @@ jobs:
           if ($env:GITHUB_REF -like "refs/tags/v*") {
               $tag = $env:GITHUB_REF_NAME
               $version = $tag.TrimStart("v")
+          } elseif ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF -eq "refs/heads/main") {
+              $versionFile = "release\VERSION"
+              if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
+                  throw "The release version file was not found: $versionFile"
+              }
+              $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+              if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+                  throw "release/VERSION must contain a SemVer version without the v prefix."
+              }
+              $tag = "v$version"
           } else {
               $short = (git rev-parse --short=12 HEAD).Trim()
               $version = "0.0.0-dev+$short"
@@ -181,21 +196,42 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+      - name: Create release tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.meta.outputs.tag != ''
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $head = (git rev-parse HEAD).Trim()
+          git fetch --tags --force
+
+          $existing = (git tag --list $tag).Trim()
+          if ($existing) {
+              $target = (git rev-list -n 1 $tag).Trim()
+              if ($target -ne $head) {
+                  throw "Tag $tag already exists and points to $target instead of $head."
+              }
+              Write-Host "Tag $tag already points to the current commit."
+          } else {
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git tag --annotate $tag --message "Release $tag"
+              git push origin "refs/tags/$tag"
+          }
+
       - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.meta.outputs.tag != ''
         uses: actions/attest-build-provenance@v4
         with:
           subject-checksums: dist/release/SHA256SUMS.txt
 
       - name: Attest SBOM
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.meta.outputs.tag != ''
         uses: actions/attest-sbom@v4
         with:
           subject-path: dist/release/albion-market-data-platform-v${{ steps.meta.outputs.version }}-windows-amd64.zip
           sbom-path: dist/release/albion-market-data-platform-v${{ steps.meta.outputs.version }}-windows-amd64.spdx.json
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.meta.outputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -203,24 +239,45 @@ jobs:
           $version = "${{ steps.meta.outputs.version }}"
           $releaseRoot = "dist\release"
           $notes = "$releaseRoot\RELEASE_NOTES.md"
-          @"
-          # Albion Market Data Platform $version
+          $versionFile = "release\VERSION"
+          $sourceNotes = "release\RELEASE_NOTES.md"
+          $useSourceNotes = $false
 
-          Native Windows distribution for the local receiver.
+          if ((Test-Path -LiteralPath $versionFile -PathType Leaf) -and
+              (Test-Path -LiteralPath $sourceNotes -PathType Leaf)) {
+              $declaredVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+              $useSourceNotes = $declaredVersion -eq $version
+          }
 
-          ## Install
+          if ($useSourceNotes) {
+              Copy-Item -LiteralPath $sourceNotes -Destination $notes
+          } else {
+              @"
+              # Albion Market Data Platform $version
 
-          ```powershell
-          Expand-Archive .\albion-market-data-platform-v$version-windows-amd64.zip C:\AlbionMarketData
-          Set-Location C:\AlbionMarketData
-          Copy-Item .env.example .env
-          .\albion-market-receiver.exe --version
-          ```
+              Native Windows distribution for the local receiver.
 
-          The executable is not Authenticode-signed. Build evidence is provided through checksums, SBOM and GitHub artifact attestations.
-          "@ | Set-Content -Encoding UTF8 $notes
+              ## Install
+
+              ```powershell
+              Expand-Archive .\albion-market-data-platform-v$version-windows-amd64.zip C:\AlbionMarketData
+              Set-Location C:\AlbionMarketData
+              Copy-Item .env.example .env
+              .\albion-market-receiver.exe --version
+              ```
+
+              The executable is not Authenticode-signed. Build evidence is provided through checksums, SBOM and GitHub artifact attestations.
+              "@ | Set-Content -Encoding UTF8 $notes
+          }
 
           $assets = Get-ChildItem $releaseRoot -File |
               Where-Object { $_.Name -ne "RELEASE_NOTES.md" } |
               ForEach-Object { $_.FullName }
-          gh release create $tag @assets --title $tag --notes-file $notes --verify-tag
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag @assets --clobber
+              gh release edit $tag --title $tag --notes-file $notes
+          } else {
+              gh release create $tag @assets --title $tag --notes-file $notes --verify-tag
+          }
