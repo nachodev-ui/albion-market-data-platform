@@ -181,8 +181,8 @@ jobs:
           $tag = '${{ steps.meta.outputs.tag }}'
           $head = '${{ steps.meta.outputs.commit }}'
           git fetch --tags --force
-          $existing = (git tag --list $tag).Trim()
-          if ($existing) {
+          $existing = git tag --list $tag | Select-Object -First 1
+          if ($null -ne $existing) {
               $target = (git rev-list -n 1 $tag).Trim()
               if ($target -ne $head) {
                   throw "Tag $tag already points to $target instead of $head."
