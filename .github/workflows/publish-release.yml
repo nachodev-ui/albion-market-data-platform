@@ -1,0 +1,219 @@
+name: Publish stable release
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - release/PUBLISH
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: publish-stable-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.head_ref == 'release/publish-current' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == github.repository_owner
+    name: Build and publish Windows package
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout protected main commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/collector/go.mod
+          cache-dependency-path: apps/collector/go.sum
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          $version = (Get-Content -LiteralPath release\VERSION -Raw).Trim()
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+              throw 'release/VERSION must contain a valid SemVer version without the v prefix.'
+          }
+
+          $tag = "v$version"
+          $commit = (git rev-parse HEAD).Trim()
+          $buildTime = (git show -s --format=%cI HEAD).Trim()
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+          "build_time=$buildTime" >> $env:GITHUB_OUTPUT
+
+      - name: Build native binaries
+        working-directory: apps/collector
+        run: |
+          $version = '${{ steps.meta.outputs.version }}'
+          $commit = '${{ steps.meta.outputs.commit }}'
+          $buildTime = '${{ steps.meta.outputs.build_time }}'
+          $ldflags = "-s -w -buildid= -X albion-market-data/collector/internal/observability.BuildVersion=$version -X albion-market-data/collector/internal/observability.BuildCommit=$commit -X albion-market-data/collector/internal/observability.BuildTime=$buildTime"
+
+          $env:CGO_ENABLED = '0'
+          New-Item -ItemType Directory -Force -Path ..\..\dist\bin\windows-amd64 | Out-Null
+          New-Item -ItemType Directory -Force -Path ..\..\dist\bin\linux-amd64 | Out-Null
+
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-receiver.exe .\cmd\receiver
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-outboxctl.exe .\cmd\outboxctl
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-backfill-history.exe .\cmd\backfillhistory
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-storagectl.exe .\cmd\storagectl
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-reprocess.exe .\cmd\reprocess
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\windows-amd64\albion-market-rebuilddb.exe .\cmd\rebuilddb
+
+          $env:GOOS = 'linux'
+          $env:GOARCH = 'amd64'
+          go build -trimpath -buildvcs=false -ldflags $ldflags -o ..\..\dist\bin\linux-amd64\albion-market-receiver .\cmd\receiver
+
+      - name: Validate receiver version
+        run: |
+          $output = .\dist\bin\windows-amd64\albion-market-receiver.exe --version | Out-String
+          $output
+          if ($output -notmatch [regex]::Escape('${{ steps.meta.outputs.version }}')) {
+              throw 'The receiver does not report the expected release version.'
+          }
+
+      - name: Assemble release assets
+        run: |
+          $version = '${{ steps.meta.outputs.version }}'
+          $packageRoot = "dist\package\albion-market-data-platform-v$version-windows-amd64"
+          $releaseRoot = 'dist\release'
+
+          New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
+          New-Item -ItemType Directory -Force -Path "$packageRoot\tools" | Out-Null
+          New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+
+          Copy-Item dist\bin\windows-amd64\albion-market-receiver.exe $packageRoot
+          Copy-Item dist\bin\windows-amd64\albion-market-outboxctl.exe "$packageRoot\tools"
+          Copy-Item dist\bin\windows-amd64\albion-market-backfill-history.exe "$packageRoot\tools"
+          Copy-Item dist\bin\windows-amd64\albion-market-storagectl.exe "$packageRoot\tools"
+          Copy-Item dist\bin\windows-amd64\albion-market-reprocess.exe "$packageRoot\tools"
+          Copy-Item dist\bin\windows-amd64\albion-market-rebuilddb.exe "$packageRoot\tools"
+          Copy-Item .env.example "$packageRoot\.env.example"
+          Copy-Item catalog "$packageRoot\catalog" -Recurse
+          Copy-Item scripts "$packageRoot\scripts" -Recurse
+          Copy-Item README.md "$packageRoot\README.md"
+          Copy-Item docs "$packageRoot\docs" -Recurse
+
+          @"
+          # Albion Market Data Platform $version
+
+          1. Descomprime el ZIP en una carpeta nueva.
+          2. Copia `.env.example` como `.env`.
+          3. Configura el token de upstream en `secrets/upstream-current.token`.
+          4. Ejecuta `scripts\receiver.ps1`.
+
+          El paquete no requiere Go instalado. El ejecutable no incluye firma Authenticode; verifica `SHA256SUMS.txt` y las attestations de GitHub.
+          "@ | Set-Content -Encoding UTF8 "$packageRoot\INSTALL.md"
+
+          syft dir:$packageRoot -o spdx-json="$packageRoot\SBOM.spdx.json"
+
+          Push-Location $packageRoot
+          Get-ChildItem -Recurse -File -Force |
+              Where-Object { $_.Name -ne 'CHECKSUMS.sha256' } |
+              Sort-Object FullName |
+              ForEach-Object {
+                  $hash = Get-FileHash -Algorithm SHA256 $_.FullName
+                  $relative = $_.FullName.Substring($PWD.Path.Length + 1).Replace('\', '/')
+                  "$($hash.Hash.ToLower())  $relative"
+              } | Set-Content -Encoding ASCII CHECKSUMS.sha256
+          Pop-Location
+
+          $zipName = "albion-market-data-platform-v$version-windows-amd64.zip"
+          Get-ChildItem -LiteralPath $packageRoot -Force |
+              Compress-Archive -DestinationPath "$releaseRoot\$zipName" -Force
+          Copy-Item "$packageRoot\SBOM.spdx.json" "$releaseRoot\albion-market-data-platform-v$version-windows-amd64.spdx.json"
+          Copy-Item dist\bin\linux-amd64\albion-market-receiver "$releaseRoot\albion-market-receiver-v$version-linux-amd64"
+
+          Get-ChildItem $releaseRoot -File |
+              Sort-Object Name |
+              ForEach-Object {
+                  $hash = Get-FileHash -Algorithm SHA256 $_.FullName
+                  "$($hash.Hash.ToLower())  $($_.Name)"
+              } | Set-Content -Encoding ASCII "$releaseRoot\SHA256SUMS.txt"
+
+      - name: Validate ZIP installation
+        run: |
+          $version = '${{ steps.meta.outputs.version }}'
+          $zip = "dist\release\albion-market-data-platform-v$version-windows-amd64.zip"
+          $installRoot = Join-Path $env:RUNNER_TEMP 'AlbionMarketData'
+          Expand-Archive $zip $installRoot -Force
+          Push-Location $installRoot
+          Copy-Item .env.example .env
+          .\albion-market-receiver.exe --version
+          .\scripts\outbox-dead-letter.ps1 -Action list
+          Pop-Location
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: albion-market-data-platform-v${{ steps.meta.outputs.version }}-release-assets
+          path: dist/release/*
+          if-no-files-found: error
+
+      - name: Validate existing tag target
+        run: |
+          $tag = '${{ steps.meta.outputs.tag }}'
+          $head = '${{ steps.meta.outputs.commit }}'
+          git fetch --tags --force
+          $existing = (git tag --list $tag).Trim()
+          if ($existing) {
+              $target = (git rev-list -n 1 $tag).Trim()
+              if ($target -ne $head) {
+                  throw "Tag $tag already points to $target instead of $head."
+              }
+          }
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dist/release/SHA256SUMS.txt
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v4
+        with:
+          subject-path: dist/release/albion-market-data-platform-v${{ steps.meta.outputs.version }}-windows-amd64.zip
+          sbom-path: dist/release/albion-market-data-platform-v${{ steps.meta.outputs.version }}-windows-amd64.spdx.json
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.meta.outputs.tag }}'
+          $commit = '${{ steps.meta.outputs.commit }}'
+          $releaseRoot = 'dist\release'
+          $notes = 'release\RELEASE_NOTES.md'
+          $assets = Get-ChildItem $releaseRoot -File | ForEach-Object { $_.FullName }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag @assets --clobber
+              gh release edit $tag --title $tag --notes-file $notes --target $commit
+          } else {
+              gh release create $tag @assets --target $commit --title $tag --notes-file $notes
+          }
