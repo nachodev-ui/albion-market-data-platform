@@ -104,10 +104,10 @@ func TestCanonicalMarketLocationDistinguishesBlackMarketFromCaerleonMarketplace(
 	}
 
 	tests := []struct {
-		input     string
-		wantID    string
-		wantName  string
-		wantKey   string
+		input    string
+		wantID   string
+		wantName string
+		wantKey  string
 	}{
 		{input: "3003", wantID: "3003", wantName: "Black Market", wantKey: "black_market"},
 		{input: "3005", wantID: "3005", wantName: "Caerleon", wantKey: "caerleon"},
