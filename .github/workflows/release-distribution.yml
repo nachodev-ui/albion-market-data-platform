@@ -13,6 +13,10 @@ on:
       - .env.example
       - .github/workflows/release-distribution.yml
       - release/**
+  workflow_dispatch:
+  issue_comment:
+    types:
+      - created
   push:
     branches:
       - main
@@ -33,6 +37,11 @@ concurrency:
 
 jobs:
   windows:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request &&
+      github.event.comment.body == '/publish-release' &&
+      github.actor == github.repository_owner)
     name: Windows native distribution
     runs-on: windows-latest
     defaults:
@@ -61,7 +70,11 @@ jobs:
           if ($env:GITHUB_REF -like "refs/tags/v*") {
               $tag = $env:GITHUB_REF_NAME
               $version = $tag.TrimStart("v")
-          } elseif ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF -eq "refs/heads/main") {
+          } elseif (
+              ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF -eq "refs/heads/main") -or
+              $env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -or
+              $env:GITHUB_EVENT_NAME -eq "issue_comment"
+          ) {
               $versionFile = "release\VERSION"
               if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
                   throw "The release version file was not found: $versionFile"
@@ -197,7 +210,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create release tag
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.meta.outputs.tag != ''
+        if: steps.meta.outputs.tag != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment')
         run: |
           $tag = "${{ steps.meta.outputs.tag }}"
           $head = (git rev-parse HEAD).Trim()
