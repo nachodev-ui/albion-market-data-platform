@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,6 +100,13 @@ func NewHandlerWithOptions(server string, rawStore RawStore, normalizer *normali
 	}, nil
 }
 
+func (h *Handler) MaxConcurrent() int {
+	if h == nil {
+		return 0
+	}
+	return cap(h.ingestSlots)
+}
+
 func isNilInterface(value any) bool {
 	if value == nil {
 		return true
@@ -127,19 +135,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	select {
-	case h.ingestSlots <- struct{}{}:
-		defer func() { <-h.ingestSlots }()
-	default:
-		w.Header().Set("Retry-After", "1")
-		h.logEvent(observability.LevelRetry, "ingest.backpressure_rejected", observability.F("path", r.URL.Path), observability.F("max_concurrent", cap(h.ingestSlots)))
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{
-			"status":     "busy",
-			"retryAfter": 1,
-			"error":      "receiver ingest capacity is temporarily exhausted",
-		})
-		return
-	}
 
 	topic := strings.Trim(r.URL.Path, "/")
 	if topic == "" {
@@ -161,6 +156,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Once the body has been accepted, preserve and process it independently of
+	// client cancellation. Albion Data Client does not retry every non-2xx
+	// response, so a disconnected HTTP client must not turn into lost market data.
+	processingRequest := r.Clone(context.WithoutCancel(r.Context()))
 	receivedAt := h.now().UTC()
 	rawEvent := domain.RawIngestEvent{
 		SchemaVersion: 1,
@@ -170,21 +169,58 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ReceivedAt:    receivedAt,
 		Payload:       append(json.RawMessage(nil), body...),
 	}
-	if err := h.rawStore.AppendRaw(r.Context(), rawEvent); err != nil {
+	if err := h.rawStore.AppendRaw(processingRequest.Context(), rawEvent); err != nil {
 		h.logEvent(observability.LevelError, "ingest.raw_failed", observability.F("topic", topic), observability.F("error", err))
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not persist raw event"})
 		return
 	}
 
+	// Apply backpressure only after durable raw persistence. Excess local bursts
+	// wait for a processing slot instead of receiving an immediate 429 that the
+	// capture client may never retry.
+	if ingestPipeline(topic) != "" {
+		waited := h.acquireIngestSlot(topic)
+		defer func() { <-h.ingestSlots }()
+		if waited > 0 {
+			w.Header().Set("X-Ingest-Queue-Wait-Ms", strconv.FormatInt(waited.Milliseconds(), 10))
+		}
+	}
+
 	switch topic {
 	case "markethistories.ingest":
-		h.handleHistory(w, r, body, receivedAt)
+		h.handleHistory(w, processingRequest, body, receivedAt)
 	case "marketorders.ingest":
-		h.handleOrders(w, r, body, receivedAt)
+		h.handleOrders(w, processingRequest, body, receivedAt)
 	default:
 		h.logEvent(observability.LevelInfo, "ingest.raw_stored", observability.F("topic", topic), observability.F("bytes", len(body)))
 		writeJSON(w, http.StatusOK, map[string]string{"status": "raw-stored", "topic": topic})
 	}
+}
+
+func (h *Handler) acquireIngestSlot(topic string) time.Duration {
+	select {
+	case h.ingestSlots <- struct{}{}:
+		return 0
+	default:
+	}
+
+	started := time.Now()
+	h.logEvent(
+		observability.LevelRetry,
+		"ingest.backpressure_wait_started",
+		observability.F("topic", topic),
+		observability.F("max_concurrent", cap(h.ingestSlots)),
+	)
+	h.ingestSlots <- struct{}{}
+	waited := time.Since(started)
+	h.logEvent(
+		observability.LevelOK,
+		"ingest.backpressure_wait_completed",
+		observability.F("topic", topic),
+		observability.F("max_concurrent", cap(h.ingestSlots)),
+		observability.F("wait_ms", waited.Milliseconds()),
+	)
+	return waited
 }
 
 func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request, body []byte, receivedAt time.Time) {

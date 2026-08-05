@@ -15,6 +15,7 @@ APP_ENV=development
 COLLECTOR_LISTEN=127.0.0.1:8787
 COLLECTOR_DATA_DIR=./data
 COLLECTOR_CATALOG_DIR=./catalog
+COLLECTOR_INGEST_MAX_CONCURRENT=0
 LOCAL_DATABASE_PATH=./data/database/market-state.json
 LOG_FORMAT=text
 LOG_COLOR=auto
@@ -22,6 +23,30 @@ LOG_COLOR=auto
 
 `COLLECTOR_LISTEN` debe mantenerse en loopback, salvo que conscientemente
 habilites acceso remoto con `COLLECTOR_ALLOW_REMOTE=true`.
+
+## Ráfagas de ingestión
+
+`COLLECTOR_INGEST_MAX_CONCURRENT` limita únicamente las normalizaciones que se
+ejecutan al mismo tiempo. El valor `0` selecciona automáticamente al menos cuatro
+operaciones concurrentes.
+
+Desde `v0.1.2`, el receiver lee y persiste primero cada payload válido en el
+almacenamiento raw. Cuando todos los slots están ocupados, la petición espera su
+turno en lugar de recibir inmediatamente `429 Too Many Requests`. Así, las
+ráfagas simultáneas de órdenes e historial generadas por Albion Data Client no se
+pierden antes de entrar al pipeline propio.
+
+Durante una espera aparecen los eventos:
+
+```text
+ingest.backpressure_wait_started
+ingest.backpressure_wait_completed
+```
+
+El segundo incluye `wait_ms`. La respuesta también expone
+`X-Ingest-Queue-Wait-Ms` cuando hubo espera. Solo aumenta manualmente la
+concurrencia si el equipo dispone de CPU y almacenamiento suficientes; el valor
+automático es la configuración recomendada.
 
 ## Perfil de producción con Render
 
@@ -43,6 +68,7 @@ APP_ENV=production
 LOAD_DOTENV=true
 LOG_FORMAT=json
 LOG_COLOR=never
+COLLECTOR_INGEST_MAX_CONCURRENT=0
 UPSTREAM_ENABLED=true
 UPSTREAM_HISTORY_ENABLED=true
 UPSTREAM_BASE_URL=https://albion-market-api.onrender.com
