@@ -263,22 +263,22 @@ jobs:
           if ($useSourceNotes) {
               Copy-Item -LiteralPath $sourceNotes -Destination $notes
           } else {
-              @"
-              # Albion Market Data Platform $version
-
-              Native Windows distribution for the local receiver.
-
-              ## Install
-
-              ```powershell
-              Expand-Archive .\albion-market-data-platform-v$version-windows-amd64.zip C:\AlbionMarketData
-              Set-Location C:\AlbionMarketData
-              Copy-Item .env.example .env
-              .\albion-market-receiver.exe --version
-              ```
-
-              The executable is not Authenticode-signed. Build evidence is provided through checksums, SBOM and GitHub artifact attestations.
-              "@ | Set-Content -Encoding UTF8 $notes
+              @(
+                  "# Albion Market Data Platform $version"
+                  ""
+                  "Native Windows distribution for the local receiver."
+                  ""
+                  "## Install"
+                  ""
+                  '```powershell'
+                  "Expand-Archive .\albion-market-data-platform-v$version-windows-amd64.zip C:\AlbionMarketData"
+                  "Set-Location C:\AlbionMarketData"
+                  "Copy-Item .env.example .env"
+                  ".\albion-market-receiver.exe --version"
+                  '```'
+                  ""
+                  "The executable is not Authenticode-signed. Build evidence is provided through checksums, SBOM and GitHub artifact attestations."
+              ) | Set-Content -Encoding UTF8 $notes
           }
 
           $assets = Get-ChildItem $releaseRoot -File |
