@@ -34,6 +34,32 @@ Revisa especialmente:
 Después de una visita real a un mercado deben aumentar capturas, entradas y
 batches enviados. La profundidad de outbox debería regresar a cero.
 
+## Ráfagas y backpressure local
+
+En `v0.1.1` y versiones anteriores, una ráfaga superior al límite concurrente
+producía:
+
+```text
+ingest.backpressure_rejected
+status=429
+```
+
+Ese rechazo ocurría antes de leer el body, por lo que el payload no entraba al
+almacenamiento raw, la normalización ni la outbox.
+
+Desde `v0.1.2`, un payload válido se guarda primero y después espera un slot. Una
+ráfaga saludable puede mostrar:
+
+```text
+ingest.backpressure_wait_started
+ingest.backpressure_wait_completed wait_ms=...
+```
+
+No debería volver a aparecer `ingest.backpressure_rejected`. Los access logs
+deben terminar en `200` o `202`, y `X-Ingest-Queue-Wait-Ms` indica cuánto esperó
+una petición concreta. Si las esperas son sostenidas, revisa disco y CPU antes de
+ajustar `COLLECTOR_INGEST_MAX_CONCURRENT`.
+
 ## Verificación integral de producción
 
 ```powershell
@@ -98,7 +124,8 @@ Para probar únicamente la API local, sin Render ni Albion Data Client:
 - `timeout`: despertar de Render o red lenta;
 - `outbox_depth` creciente: la API no está aceptando batches;
 - `dead_letter` creciente: se agotaron los intentos acumulados;
-- capturas en cero: Albion Data Client no está enviando al puerto 8787.
+- capturas en cero: Albion Data Client no está enviando al puerto 8787;
+- esperas de ingesta sostenidas: almacenamiento o CPU local saturados.
 
 ## Evidencia para reportar problemas
 
