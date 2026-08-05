@@ -216,7 +216,8 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           git fetch --tags --force
 
-          $existing = (git tag --list $tag).Trim()
+          $existingOutput = git tag --list $tag
+          $existing = if ($null -eq $existingOutput) { "" } else { ([string]$existingOutput).Trim() }
           if ($existing) {
               $target = (git rev-list -n 1 $tag).Trim()
               if ($target -ne $head) {
