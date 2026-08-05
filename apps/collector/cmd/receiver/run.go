@@ -38,6 +38,7 @@ func run() error {
 	listenAddress := flag.String("listen", envString("COLLECTOR_LISTEN", "127.0.0.1:8787"), "local HTTP address to listen on")
 	allowRemoteListen := flag.Bool("allow-remote-listen", envBool("COLLECTOR_ALLOW_REMOTE", false), "allow the receiver HTTP server to bind to a non-loopback interface")
 	maxHeaderBytes := flag.Int("max-header-bytes", envInt("COLLECTOR_MAX_HEADER_BYTES", 64<<10), "maximum HTTP request-header bytes")
+	ingestMaxConcurrent := flag.Int("ingest-max-concurrent", envInt("COLLECTOR_INGEST_MAX_CONCURRENT", 0), "maximum concurrent normalized ingest operations; 0 selects an automatic value and excess requests wait after raw persistence")
 	allowedOriginsText := flag.String("allowed-origins", envString("LOCAL_API_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"), "comma-separated browser origins allowed to read the local API")
 	dataDirectory := flag.String("data-dir", envString("COLLECTOR_DATA_DIR", "./data"), "root directory for raw and normalized storage")
 	catalogDirectory := flag.String("catalog-dir", envString("COLLECTOR_CATALOG_DIR", "./catalog"), "directory containing items.txt and markets.json")
@@ -74,6 +75,9 @@ func run() error {
 	}
 	if *maxHeaderBytes < 1024 || *maxHeaderBytes > 1<<20 {
 		return fmt.Errorf("COLLECTOR_MAX_HEADER_BYTES must be between 1024 and 1048576")
+	}
+	if *ingestMaxConcurrent < 0 || *ingestMaxConcurrent > 1024 {
+		return fmt.Errorf("COLLECTOR_INGEST_MAX_CONCURRENT must be between 0 and 1024")
 	}
 	allowedOrigins, err := parseAllowedOrigins(*allowedOriginsText)
 	if err != nil {
@@ -191,7 +195,18 @@ func run() error {
 		}
 	}
 
-	ingestHandler, err := httpingest.NewHandlerWithOptions(*serverName, rawStore, normalizer, priceForwarder, historyForwarder, logger, httpingest.Options{Metrics: metricsRegistry})
+	ingestHandler, err := httpingest.NewHandlerWithOptions(
+		*serverName,
+		rawStore,
+		normalizer,
+		priceForwarder,
+		historyForwarder,
+		logger,
+		httpingest.Options{
+			MaxConcurrent: *ingestMaxConcurrent,
+			Metrics:       metricsRegistry,
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -236,7 +251,7 @@ func run() error {
 		Handler:           observability.WithRequestID(observability.WithHTTPLogging(mux, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    *maxHeaderBytes,
 	}
@@ -258,6 +273,7 @@ func run() error {
 		observability.F("database", absoluteDatabasePath),
 		observability.F("histories_imported", imported.HistoryImported),
 		observability.F("orders_imported", imported.OrdersImported),
+		observability.F("ingest_max_concurrent", ingestHandler.MaxConcurrent()),
 		observability.F("log_format", *logFormat),
 		observability.F("color", *logColor),
 	)
